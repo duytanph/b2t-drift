@@ -1,0 +1,36 @@
+[project]
+name = "b2t-drift"
+version = "0.1.0"
+description = "Studying degradation of an intracortical speech-decoding model across recording sessions (Brain-to-Text '25 / T15 dataset)."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "torch>=2.6",
+    "h5py",
+    "numpy",
+    "pyyaml",
+    "matplotlib",
+    "pandas",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/b2t_drift"]
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
+# --- PyTorch CUDA index configuration -----------------------------------
+# Target hardware: RTX 2080 SUPER (Turing, compute capability 7.5), CUDA 12.x.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]

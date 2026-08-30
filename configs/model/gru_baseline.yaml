@@ -1,0 +1,11 @@
+# Baseline GRU model configuration.
+#
+# TODO: placeholder values only -- not yet tuned or validated.
+
+model_name: gru_baseline  # TODO
+hidden_size: null  # TODO
+num_layers: null  # TODO
+dropout: null  # TODO
+bidirectional: null  # TODO
+
+# TODO: day-layer configuration, once day_layers.py is implemented

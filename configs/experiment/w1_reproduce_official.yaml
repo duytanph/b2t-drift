@@ -1,0 +1,14 @@
+# Week-1 experiment: attempt to reproduce official baseline numbers on T15
+# before running any drift analysis.
+#
+# TODO: placeholder values only.
+
+experiment_name: w1_reproduce_official  # TODO
+data_config: configs/data/t15.yaml
+model_config: configs/model/gru_baseline.yaml
+seed: null  # TODO
+num_epochs: null  # TODO
+batch_size: null  # TODO
+learning_rate: null  # TODO
+
+# TODO: define success criteria for "reproduced" (target PER, etc.)

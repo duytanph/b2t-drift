@@ -1,0 +1,19 @@
+# Data and run artifacts
+data/*
+!data/interim/
+data/interim/*
+!data/interim/session_manifest.csv
+runs/
+.venv/
+__pycache__/
+*.pt
+*.hdf5
+*.pkl
+
+# Throwaway investigation scripts
+scratch/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Do NOT ignore splits/ or figures/ -- these are versioned artifacts.

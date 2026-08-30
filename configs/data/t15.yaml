@@ -1,0 +1,32 @@
+# Data configuration for the Brain-to-Text '25 (T15) dataset.
+#
+# Values confirmed against data/raw/hdf5_data_final/ via
+# scripts/00_verify_data.py and scratch/investigate_labels.py (see
+# GLOSSARY.md "Dataset facts" for the full record). See the module
+# docstring in src/b2t_drift/data/hdf5_io.py for the trial-group schema.
+
+dataset_name: t15
+raw_data_dir: data/raw/hdf5_data_final
+manifest_path: data/interim/session_manifest.csv
+
+n_features: 512          # input_features channels per 20 ms bin
+bin_size_ms: 20
+
+n_phoneme_classes: 40    # seq_class_ids values inside seq_len are exactly 1..40
+ctc_output_size: 41      # blank (index 0) + 40 phoneme classes
+blank_index: 0           # also the seq_class_ids padding value -- not
+                          # distinguishable from padding without seq_len
+pad_value: 0
+seq_class_ids_padded_length: 500
+
+# `test` partitions have no seq_len / sentence_label attributes at all --
+# they are unlabeled and unusable for supervised training or evaluation.
+# Only train + val (9,498 trials) carry labels.
+
+# `transcription` is redundant with the `sentence_label` HDF5 attribute
+# (verified identical in 200/200 sampled trials, after ASCII decoding) --
+# do not load `transcription` in the data pipeline.
+
+# Normalization statistics should be computed per block, not per session:
+# val and test are trial-level splits of the same held-out block(s) within
+# a session, so session-level statistics would leak across that split.

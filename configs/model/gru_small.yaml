@@ -1,0 +1,9 @@
+# Smaller GRU model variant, for faster iteration during development.
+#
+# TODO: placeholder values only.
+
+model_name: gru_small  # TODO
+hidden_size: null  # TODO
+num_layers: null  # TODO
+dropout: null  # TODO
+bidirectional: null  # TODO
