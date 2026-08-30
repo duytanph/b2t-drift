@@ -1,54 +1,57 @@
 """Phoneme vocabulary and label-index conventions.
 
-Responsible for the canonical mapping between phoneme symbols and the
-integer class indices used by the CTC loss and decoder, including the blank
-token convention. Do not hardcode a specific vocabulary here until the T15
-label format has been inspected.
+Source: Brain-to-Text '25 Kaggle competition data page
+(https://www.kaggle.com/competitions/brain-to-text-25/data).
+
+Index 0 is the CTC blank symbol; it never appears in `seq_class_ids` within
+`seq_len` (see GLOSSARY.md "Dataset facts"). Indices 1-39 are the 39
+standard ARPABET phonemes, in alphabetical order. Index 40 is a silence
+token, not a phoneme. `seq_class_ids` values are observed empirically to
+fall in the range 1-40.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 
-class PhonemeVocabulary:
-    """Bidirectional mapping between phoneme symbols and label indices.
+LOGIT_TO_PHONEME = [
+    'BLANK',    # "BLANK" = CTC blank symbol
+    'AA', 'AE', 'AH', 'AO', 'AW',
+    'AY', 'B', 'CH', 'D', 'DH',
+    'EH', 'ER', 'EY', 'F', 'G',
+    'HH', 'IH', 'IY', 'JH', 'K',
+    'L', 'M', 'N', 'NG', 'OW',
+    'OY', 'P', 'R', 'S', 'SH',
+    'T', 'TH', 'UH', 'UW', 'V',
+    'W', 'Y', 'Z', 'ZH',
+    ' | ',    # "|" = silence token
+]
 
-    TODO: confirm against the actual T15 label files whether the blank
-    token is index 0, and whether silence/noise symbols need special
-    handling.
+assert len(LOGIT_TO_PHONEME) == 41
+
+BLANK_INDEX = 0
+SILENCE_INDEX = 40
+N_CLASSES = len(LOGIT_TO_PHONEME)  # 41
+
+PHONEME_TO_LOGIT = {phoneme: index for index, phoneme in enumerate(LOGIT_TO_PHONEME)}
+
+
+def decode_ids(ids: Sequence[int]) -> list[str]:
+    """Map integer label IDs to phoneme strings.
+
+    Args:
+        ids: Label indices, each expected in `[0, N_CLASSES)`.
+
+    Returns:
+        The corresponding phoneme strings, in order.
+
+    Raises:
+        ValueError: If any id is outside `[0, N_CLASSES)`. Out-of-range
+            values are never silently skipped or clamped.
     """
-
-    def __init__(self, symbols: list[str], blank_index: int = 0) -> None:
-        """Build a vocabulary from an ordered list of phoneme symbols.
-
-        Args:
-            symbols: Phoneme symbols, in index order (excluding blank).
-            blank_index: Index reserved for the CTC blank token.
-        """
-        raise NotImplementedError
-
-    def encode(self, phonemes: list[str]) -> list[int]:
-        """Convert a sequence of phoneme symbols to label indices.
-
-        Args:
-            phonemes: Phoneme symbols.
-
-        Returns:
-            Corresponding label indices.
-        """
-        raise NotImplementedError
-
-    def decode(self, indices: list[int]) -> list[str]:
-        """Convert a sequence of label indices back to phoneme symbols.
-
-        Args:
-            indices: Label indices.
-
-        Returns:
-            Corresponding phoneme symbols.
-        """
-        raise NotImplementedError
-
-    @property
-    def size(self) -> int:
-        """Total vocabulary size, including the blank token."""
-        raise NotImplementedError
+    decoded = []
+    for i in ids:
+        if not (0 <= i < N_CLASSES):
+            raise ValueError(f"label id {i} out of range [0, {N_CLASSES})")
+        decoded.append(LOGIT_TO_PHONEME[i])
+    return decoded
