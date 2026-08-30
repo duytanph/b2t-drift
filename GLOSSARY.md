@@ -106,7 +106,11 @@ files, not taken from any published documentation.
   `seq_class_ids` -- they are indistinguishable without `seq_len`.
 - CTC output layer size is therefore **41** (blank + 40 classes), not 40.
 - The integer -> phoneme-string mapping is **not present** in the HDF5
-  files. Not yet located -- see Known unknowns.
+  files, but is now known (sourced from the Brain-to-Text '25 Kaggle
+  competition data page) and lives in `src/b2t_drift/phonemes.py` as
+  `LOGIT_TO_PHONEME`: index 0 is the CTC blank, indices 1-39 are the 39
+  standard ARPABET phonemes (alphabetical), and index 40 is a silence
+  token.
 
 **Block structure**
 - In all 41 three-file sessions, `val` and `test` draw from an
@@ -124,9 +128,6 @@ files, not taken from any published documentation.
 
 ## Known unknowns
 
-- **Phoneme integer -> string mapping.** Not present anywhere in the
-  HDF5 files. Must come from the official `nejm-brain-to-text` repository
-  (or accompanying paper/code) -- do not guess or invent a mapping.
 - **Whether the pretrained baseline checkpoint can be evaluated with our
   code.** Not yet determined -- depends on whether our model
   architecture, feature preprocessing, and phoneme vocabulary ordering
