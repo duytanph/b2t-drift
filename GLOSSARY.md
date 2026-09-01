@@ -48,6 +48,19 @@ record of dataset facts established by direct inspection of
   consistent with the 512 `input_features` channels here being 256
   electrodes x {TX, SBP}, but this specific pairing is *not* verified
   from the HDF5 files themselves.
+- **Grapheme**: The smallest written unit of a language -- a letter or
+  letter combination that maps to a sound. "Ph" in "phone" is one
+  grapheme, representing the phoneme /F/. Contrast with phoneme (the
+  sound unit): graphemes are about spelling, phonemes are about
+  pronunciation, and the mapping between them is not one-to-one. See the
+  phoneme vocabulary in `src/b2t_drift/phonemes.py` and the "Label
+  encoding" facts below.
+- **G2P (grapheme-to-phoneme)**: The conversion of written text into a
+  phoneme sequence, typically by dictionary lookup (the CMU Pronouncing
+  Dictionary, for English). This is how this dataset's `seq_class_ids`
+  labels were derived: from the known prompt text (`sentence_label`), via
+  G2P, not from the neural data and not from any audio recording of the
+  participant.
 - **CTC (Connectionist Temporal Classification)**: Loss function used to
   train sequence models without frame-level alignment between neural
   features and phoneme labels.

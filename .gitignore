@@ -3,6 +3,9 @@ data/*
 !data/interim/
 data/interim/*
 !data/interim/session_manifest.csv
+!data/external/
+data/external/*
+!data/external/t15_copyTaskData_description.csv
 runs/
 .venv/
 __pycache__/
