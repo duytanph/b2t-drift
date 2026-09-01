@@ -6,6 +6,10 @@ which are stubs.
 
 from __future__ import annotations
 
+import pytest
 
+
+@pytest.mark.xfail(strict=True, raises=NotImplementedError,
+                   reason="stub: module not yet implemented")
 def test_loss_decreases_when_overfitting_one_batch() -> None:
     raise NotImplementedError
