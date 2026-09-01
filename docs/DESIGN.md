@@ -92,14 +92,22 @@ correction the official baseline needed — see Task 4 findings below.
   batch by similar length instead.
 - **Block-level normalization.** Array statistics shift within a single
   session, not just across sessions, so z-scoring must be computed per
-  block, not per session. **Caveat as of Task 1 (2026-09-01):** the raw
-  `input_features` values in the released HDF5 already appear to be
-  z-scored (every sampled column has mean ≈ 0, std ≈ 1) — see Findings
-  below. This needs reconciling before implementing our own normalization
-  step: either the release already did block-level normalization upstream
-  and "normalize per block" means "trust the released values," or there
-  is a second, un-normalized feature source we haven't found. Do not
-  implement `data/normalize.py` until this is resolved.
+  block, not per session. **Superseded as of the normalization-unit
+  follow-up (2026-09-01):** the raw `input_features` values in the
+  released HDF5 are already z-scored (every sampled column has mean ≈ 0,
+  std ≈ 1), and the official training code applies no further
+  normalization at load time or in the model — see `docs/DATASET.md`
+  section 9 [verified] and the Findings below. Block-level is ruled out as
+  the normalization unit; session vs. global is unresolved. **Do not
+  implement `data/normalize.py` as a from-scratch per-block z-score** —
+  the values may already be adequately normalized. Revisit once the unit
+  question is resolved.
+- **GPU budget is not a constraint on model size.** The Task 3 benchmark
+  (below) showed the full baseline architecture (5 layers, 1024 hidden)
+  trains in ~1.3 hours per 10,000 steps at fp32 on this machine, with no
+  OOM risk even at batch=64. Ablations and the main drift-curve runs can
+  use the full-size model throughout — there is no need to fall back to
+  the "small" (3 layer, 512 hidden) config to fit time or memory budgets.
 
 ---
 
@@ -324,3 +332,85 @@ From the state_dict shapes:
   note in `docs/DATASET.md` section 13).
 - `use_amp: true` in `args.yaml` — the official baseline was trained with
   mixed precision, same choice our Task 3 benchmark evaluates.
+
+### Follow-up — normalization unit (2026-09-01)
+
+Direct follow-up to the Task 1 finding above that `input_features` are
+already z-scored. Sampled every train block from 3 sessions spanning early
+2023 / mid 2024 / early 2025 (18 blocks total), recomputed per-column
+mean/std at block, session (train-only and full train+val+test), and
+3-session-pooled granularity (`scratch/investigate_normalization_unit.py`).
+
+- **Per-block: rejected.** Recomputed block-level column means/stds have a
+  5th–95th-percentile spread of ~0.06 across the 512 columns. If a block's
+  own data were exactly what was normalized against, recomputing its mean
+  on itself is an exact identity and must land within floating-point
+  precision (~1e-6), not 0.06.
+- **Per-session: tighter, but not confirmed.** Pooling a session's own
+  train blocks gives ~0.025 spread; adding that session's val+test blocks
+  (i.e. the *whole* session) tightens it further to ~0.019–0.026 depending
+  on the session — closer to zero than block-level, but still an order of
+  magnitude above floating-point precision. Exact per-session
+  normalization, recomputed on the same population it was supposedly fit
+  on, is not confirmed.
+- **Global (fixed, dataset-wide statistics): the diagnostic prediction did
+  not materialize.** If a single fixed mean/std were computed once (e.g.
+  early in the deployment) and never updated, later sessions should show
+  growing deviation from 0/1 as genuine neural drift accumulates —
+  that's the residual signal the whole project is trying to measure.
+  Plotting per-block column means for 6 representative columns across 12
+  sessions spread over the full 20 months
+  (`figures/normalization_unit_check.png`) shows **no visible trend**: all
+  values stay within roughly ±0.08 of zero throughout, with no monotonic
+  drift.
+- **Verdict: block-level rejected with high confidence. Session vs. global
+  is not distinguished by this evidence — genuinely ambiguous, not a close
+  call resolved in either direction.** Plausible explanations for the
+  unresolved residual (~0.02–0.03) that don't require abandoning
+  per-session normalization: the true fitting population may not exactly
+  match "all bins in this session" (e.g. a robust/median-based statistic
+  rather than mean/std, or a slightly different trial subset than what we
+  reconstructed). This is a real open question, not a rounding error —
+  see `docs/DATASET.md` section 9 and section 17.
+- Confirmed via the official repo's `model_training/dataset.py` and
+  `model_training/rnn_model.py` (fetched from GitHub) that no further
+  normalization is applied downstream of the HDF5 files — whatever
+  produced the observed 0/1 statistics happened entirely upstream of what
+  either the official pipeline or ours currently touches.
+
+### Follow-up — Switchboard-only viability for the drift curve (2026-09-01)
+
+Direct follow-up to the Task 2 corpus-confound finding above. Using
+`data/external/t15_copyTaskData_description.csv` (Switchboard trial counts,
+capped at each session's actual manifest-labeled trial total where the CSV
+overcounts) against the planned split
+(`scratch/investigate_switchboard_viability.py`):
+
+- The planned TRAIN block (sessions 1–15) has ~3,641–3,997 labeled
+  Switchboard trials (CSV vs. manifest-capped), out of 3,969 total labeled
+  trials in that block — Switchboard dominates training data either way.
+- Of the 30 held-out sessions, **11 fall below the 50-trial threshold**
+  for a Switchboard-only PER estimate (mostly the Nov–Dec 2023 cluster
+  that Task 2 already identified as the Freq-words era, plus 3 isolated
+  low-Switchboard sessions: `2024-03-03`, `2024-04-25`, `2024-04-28`).
+- **19 of 30 (63%) held-out sessions survive** a Switchboard-only,
+  ≥50-trial restriction. Their day-offset range is **5 to 546 days** —
+  the *full* originally-planned range is preserved end to end; no
+  truncation at either extreme.
+- **All 6 of the 2025 sessions (day offsets +453 to +546) survive.** These
+  are the most valuable long-range points on the curve and none are lost
+  to this restriction.
+- The cost is concentrated in temporal *density*, not range: the
+  Switchboard-only restriction removes most of the originally-dense early
+  window (day offsets 20–63 are entirely gone, along with two later
+  isolated points at +140 and +193), which was specifically designed to be
+  dense because the curve is expected to change fastest early on. The
+  20–546 day range still has coverage, just sparser in the first ~2
+  months.
+- Figure: `figures/switchboard_trials_per_session.png`.
+- **Verdict: a Switchboard-only primary analysis is viable.** It trades
+  early-window density for corpus cleanliness, keeps the full extrapolation
+  range including the highest-value long-range points, and removes the
+  worst of the corpus confound Task 2 identified. This is a feasibility
+  finding only — the split design in section 3 has not been changed to
+  adopt it.

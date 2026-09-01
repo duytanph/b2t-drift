@@ -187,10 +187,48 @@ Applied by the authors before release:
 4. Spike band power computation
 5. Binning to 20 ms
 6. De-identification (the Dryad deposit states it contains no personal or identifiable information)
+7. **Normalization (z-scoring). [verified]** Corrected from an earlier draft
+   of this document, which claimed normalization was left to us. It is not.
+   Direct inspection of raw `input_features` values (`scratch/investigate_feature_layout.py`,
+   `scratch/investigate_normalization_unit.py`, 2026-09-01) shows every
+   sampled column already has mean ≈ 0, std ≈ 1 — the released values are
+   already z-scored, not raw counts/power. Confirmed independently by
+   reading the official repo's `model_training/dataset.py` and
+   `model_training/rnn_model.py`: neither applies any further
+   normalization, z-scoring, or standardization at load time or in the
+   model — `input_features` is used exactly as loaded from HDF5, and the
+   only per-input transform in the model (`day_weights`/`day_biases`) is a
+   *learned*, per-session affine layer initialized to the identity matrix
+   and zero bias, not a fixed normalization step.
+   **The normalization *unit* (global / per-session / per-block) is not
+   fully resolved.** Recomputing mean/std over an exact candidate unit's
+   own data must reproduce ≈0/≈1 to within floating-point precision if
+   that unit is what was actually normalized against; that only cleanly
+   rules things out, it doesn't cleanly confirm the true unit:
+     - **Per-block: ruled out with high confidence.** Recomputed per-block
+       column means/stds scatter with a 5th–95th-percentile spread of
+       ~0.06 — far too large to be exact-block normalization recomputed on
+       itself (that would show ~1e-6 spread).
+     - **Per-session: not confirmed, evidence favors it only moderately.**
+       Recomputed per-session statistics (even pooling train+val+test) are
+       tighter (~0.02 spread) than block-level but still not near machine
+       precision, so exact per-session normalization is not fully
+       confirmed either.
+     - **Global (one fixed mean/std for the whole 20-month dataset):** the
+       clearest prediction of this hypothesis — visible drift in per-block
+       column means over the 20-month timeline — was **not observed**
+       (`figures/normalization_unit_check.png`: values stay within a
+       roughly ±0.08 band across the entire timeline with no monotonic
+       trend).
+   **Net: block-level is rejected; session vs. global is not distinguished
+   by the evidence collected so far.** Do not assume block-level
+   normalization when implementing `data/normalize.py` — if further
+   normalization is applied at all, treat the existing values as already
+   adequately normalized rather than re-deriving per-block statistics from
+   scratch, pending a follow-up investigation.
 
 **Left to us:**
 
-- Normalization (z-scoring). The baseline does this **per block**, not per session, because within-day statistics shift.
 - Any temporal smoothing or downsampling
 - Batching and padding strategy
 - Data augmentation, if any
@@ -199,7 +237,9 @@ Applied by the authors before release:
 
 ## 10. What the participant was actually saying — and the confound this creates
 
-Sentences were drawn from several different corpora: **Switchboard** (conversational telephone speech), **OpenWebText2**, a **50-word corpus**, a custom frequent-word corpus, and a corpus of **random word sequences**. Blocks differ in which corpus they used.
+Sentences were drawn from **six** different corpora [verified against `data/external/t15_copyTaskData_description.csv`, 2026-09-01]: **Switchboard** (conversational telephone speech, 7,672 trials — the large majority), **Freq words** (a frequent-word corpus, 2,050), **50-Word** (1,091), **Openwebtext** (172), **Harvard** (Harvard sentences, a standard phonetically-balanced speech corpus, 98), and **Random** (random word sequences, 79). Blocks differ in which corpus they used.
+
+> Earlier drafts of this document (and the official repo's own README) name only five corpora, omitting **Harvard**. It is a small corpus (98 trials, confined to `2023-10-20` through `2023-11-03`) but it is present in the released description CSV and should not be forgotten when stratifying by corpus.
 
 Additionally — and this is the important part — **most data is attempted *vocalized* speech, but some is attempted *silent* speech**, and the authors deliberately **do not publish which blocks are which**.
 
@@ -319,7 +359,9 @@ The full published pipeline goes: neural features → GRU + CTC → phoneme sequ
 
 ## 17. Open questions
 
-- [ ] Verify the 512-feature column boundaries empirically (official docs are off by one)
-- [ ] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline
-- [ ] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code
-- [ ] Determine typical block sizes and whether block count per session varies systematically over time
+- [x] Verify the 512-feature column boundaries empirically (official docs are off by one) — confirmed 64-wide blocks; see `docs/DESIGN.md` section 7, Task 1.
+- [x] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline — done; serious confound found, see `docs/DESIGN.md` section 7, Task 2.
+- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code — loaded and inspected (not yet run for inference); see `docs/DESIGN.md` section 7, Task 4b.
+- [x] Determine typical block sizes and whether block count per session varies systematically over time — done; see `docs/DESIGN.md` section 7, Task 4a.
+- [ ] Resolve the normalization unit (per-session vs. global) — block-level is ruled out but session vs. global is not distinguished by the evidence so far; see section 9 above and `docs/DESIGN.md` section 7.
+- [ ] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound — investigated (19/30 held-out sessions survive a 50-trial threshold, full day-offset range preserved), decision on whether to adopt it is still open; see `docs/DESIGN.md` section 7.
