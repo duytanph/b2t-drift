@@ -221,11 +221,34 @@ Applied by the authors before release:
        roughly ±0.08 band across the entire timeline with no monotonic
        trend).
    **Net: block-level is rejected; session vs. global is not distinguished
-   by the evidence collected so far.** Do not assume block-level
-   normalization when implementing `data/normalize.py` — if further
-   normalization is applied at all, treat the existing values as already
-   adequately normalized rather than re-deriving per-block statistics from
-   scratch, pending a follow-up investigation.
+   by the statistical evidence.** Do not assume block-level normalization
+   when implementing `data/normalize.py` — if further normalization is
+   applied at all, treat the existing values as already adequately
+   normalized rather than re-deriving per-block statistics from scratch.
+
+   **Follow-up (2026-09-01): an exact arithmetic method was attempted and
+   could not settle it either — for a deeper reason than measurement
+   precision.** TX columns are integer spike counts before release, so
+   `released = (raw - mu) / sigma` should make each column's distinct
+   values sit on an evenly-spaced lattice with spacing `1/sigma`, letting
+   `(mu, sigma)` be solved exactly (`scratch/recover_normalization_params.py`).
+   **No such lattice was found**: across 4,608 (session, block, column)
+   cases tested (3 sessions from different eras, all their train blocks,
+   all 256 TX columns), only 3 showed constant spacing, and all 3 are
+   float32-precision artifacts (recovered `sigma` of exactly `2^24` /
+   `2^25`, the float32 mantissa limit, inverting to physiologically
+   absurd raw counts up to ~350 million) — not real lattices. A control
+   test confirmed the method works (0/108 SBP columns showed a lattice, as
+   expected for genuinely continuous data), so this is a real absence of
+   lattice structure in TX, not a broken detector. **The normalization
+   unit therefore remains unresolved — not because our tests weren't
+   sharp enough, but because the simplest premise (a fixed per-column
+   affine transform of integer counts) is not well supported by the data
+   as tested.** Plausible untested alternatives: a time-varying/adaptive
+   (e.g. rolling or exponentially-weighted) normalization; smoothing
+   applied to counts before normalization; or a transform other than
+   z-scoring. See `docs/DESIGN.md` section 9 for the full writeup. Do not
+   guess further without new evidence.
 
 **Left to us:**
 
@@ -290,6 +313,12 @@ The Kaggle terms explicitly permit repartitioning the train and validation data.
 ---
 
 ## 13. Our split design
+
+> **Revised in `docs/DESIGN.md` section 5:** the training cut point below
+> (sessions 1–15) is now one of four swept cut points (1–5, 1–10, 1–15,
+> 1–20), not the fixed design. Everything below remains accurate as the
+> 1–15 case specifically. See `docs/DESIGN.md` for the current design and
+> its rationale.
 
 **Training block:** sessions 1–15 (2023-08-11 → 2023-10-15), **3,969 labeled trials**, about two months of calibration data.
 
@@ -359,9 +388,10 @@ The full published pipeline goes: neural features → GRU + CTC → phoneme sequ
 
 ## 17. Open questions
 
-- [x] Verify the 512-feature column boundaries empirically (official docs are off by one) — confirmed 64-wide blocks; see `docs/DESIGN.md` section 7, Task 1.
-- [x] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline — done; serious confound found, see `docs/DESIGN.md` section 7, Task 2.
-- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code — loaded and inspected (not yet run for inference); see `docs/DESIGN.md` section 7, Task 4b.
-- [x] Determine typical block sizes and whether block count per session varies systematically over time — done; see `docs/DESIGN.md` section 7, Task 4a.
-- [ ] Resolve the normalization unit (per-session vs. global) — block-level is ruled out but session vs. global is not distinguished by the evidence so far; see section 9 above and `docs/DESIGN.md` section 7.
-- [ ] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound — investigated (19/30 held-out sessions survive a 50-trial threshold, full day-offset range preserved), decision on whether to adopt it is still open; see `docs/DESIGN.md` section 7.
+- [x] Verify the 512-feature column boundaries empirically (official docs are off by one) — confirmed 64-wide blocks; see `docs/DESIGN.md` section 9, Task 1.
+- [x] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline — done; serious confound found, see `docs/DESIGN.md` section 9, Task 2.
+- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code — loaded and inspected (not yet run for inference); see `docs/DESIGN.md` section 9, Task 4b.
+- [x] Determine typical block sizes and whether block count per session varies systematically over time — done; see `docs/DESIGN.md` section 9, Task 4a.
+- [x] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound — resolved: adopted as the PRIMARY analysis (`docs/DESIGN.md` section 5, corpus stratification decision); 17/30 held-out sessions survive a 50-trial threshold (corrected count — see the next item), full day-offset range (+5 to +546d) and all four curve endpoints preserved; see `docs/DESIGN.md` section 9, Task 2 (this round).
+- [x] Resolve the CSV-vs-manifest trial-count discrepancy — resolved: goes both directions (not uniformly CSV ≥ actual), roughly proportional to corpus/partition size (not concentrated), and at least partly caused by confirmed partition misattribution (a Switchboard block's trials split across labeled `val` and unlabeled `test` were being counted as if fully labeled) rather than only QC drops. HDF5/manifest is authoritative for counts; CSV is authoritative for corpus labels. See `docs/DESIGN.md` section 9, Task 3 (this round).
+- [ ] Resolve the normalization unit (per-session vs. global) — **escalated, not just unresolved.** An exact arithmetic method (Task 1 this round) found the underlying premise (TX = raw integer counts under a fixed per-column affine transform) is not well supported by the data at all — no evenly-spaced lattice exists in the values, control-tested to confirm this isn't a broken detector. Block-level is ruled out; session vs. global cannot even be posed as a clean question until the transform itself is better understood. See section 9 above and `docs/DESIGN.md` section 9, Task 1 (this round) and its statistical-approach follow-up.
