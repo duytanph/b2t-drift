@@ -103,7 +103,7 @@ Session folders are named `t15.YYYY.MM.DD`, so **dates are parseable directly fr
 
 `session → block → trial`
 
-A **block** is a contiguous recording run within a session, typically tens of trials. A **trial** is one sentence attempt. Blocks matter more than they look: array statistics shift measurably *within* a single day, which is why the official pipeline normalizes per block rather than per session.
+A **block** is a contiguous recording run within a session, typically tens of trials. A **trial** is one sentence attempt. Blocks matter more than they look: array statistics shift measurably *within* a single day. [Corrected 2026-09-02: normalization is neither per-block nor per-session — see section 9 — but the underlying motivation, that statistics drift within a day faster than block boundaries alone would suggest, is exactly why the released normalization is a rolling per-sentence window rather than a coarser one.]
 
 ### Per-trial contents **[verified]**
 
@@ -187,68 +187,50 @@ Applied by the authors before release:
 4. Spike band power computation
 5. Binning to 20 ms
 6. De-identification (the Dryad deposit states it contains no personal or identifiable information)
-7. **Normalization (z-scoring). [verified]** Corrected from an earlier draft
-   of this document, which claimed normalization was left to us. It is not.
-   Direct inspection of raw `input_features` values (`scratch/investigate_feature_layout.py`,
-   `scratch/investigate_normalization_unit.py`, 2026-09-01) shows every
-   sampled column already has mean ≈ 0, std ≈ 1 — the released values are
-   already z-scored, not raw counts/power. Confirmed independently by
-   reading the official repo's `model_training/dataset.py` and
-   `model_training/rnn_model.py`: neither applies any further
-   normalization, z-scoring, or standardization at load time or in the
-   model — `input_features` is used exactly as loaded from HDF5, and the
-   only per-input transform in the model (`day_weights`/`day_biases`) is a
-   *learned*, per-session affine layer initialized to the identity matrix
-   and zero bias, not a fixed normalization step.
-   **The normalization *unit* (global / per-session / per-block) is not
-   fully resolved.** Recomputing mean/std over an exact candidate unit's
-   own data must reproduce ≈0/≈1 to within floating-point precision if
-   that unit is what was actually normalized against; that only cleanly
-   rules things out, it doesn't cleanly confirm the true unit:
-     - **Per-block: ruled out with high confidence.** Recomputed per-block
-       column means/stds scatter with a 5th–95th-percentile spread of
-       ~0.06 — far too large to be exact-block normalization recomputed on
-       itself (that would show ~1e-6 spread).
-     - **Per-session: not confirmed, evidence favors it only moderately.**
-       Recomputed per-session statistics (even pooling train+val+test) are
-       tighter (~0.02 spread) than block-level but still not near machine
-       precision, so exact per-session normalization is not fully
-       confirmed either.
-     - **Global (one fixed mean/std for the whole 20-month dataset):** the
-       clearest prediction of this hypothesis — visible drift in per-block
-       column means over the 20-month timeline — was **not observed**
-       (`figures/normalization_unit_check.png`: values stay within a
-       roughly ±0.08 band across the entire timeline with no monotonic
-       trend).
-   **Net: block-level is rejected; session vs. global is not distinguished
-   by the statistical evidence.** Do not assume block-level normalization
-   when implementing `data/normalize.py` — if further normalization is
-   applied at all, treat the existing values as already adequately
-   normalized rather than re-deriving per-block statistics from scratch.
+7. **Normalization (z-scoring), by a rolling per-sentence window.
+   [verified — author correspondence, 2026-09-02].** Confirmed by email
+   with Nicholas S. Card, corresponding author of Card et al. 2024 (NEJM):
+   `input_features` are z-scored **per channel**, using a **rolling
+   window of up to the previous 10 sentences' speaking epochs, inclusive
+   of the current sentence**. Sentence 5 is normalized on statistics from
+   sentences 1–5; sentence 10 on sentences 1–10; sentence 15 on sentences
+   5–15; and so on — the window fills up to width 10 and then slides.
+   This is **causal**: only past and current data are used, matching what
+   a real-time online system can actually do (it cannot normalize against
+   future sentences it hasn't seen yet).
 
-   **Follow-up (2026-09-01): an exact arithmetic method was attempted and
-   could not settle it either — for a deeper reason than measurement
-   precision.** TX columns are integer spike counts before release, so
-   `released = (raw - mu) / sigma` should make each column's distinct
-   values sit on an evenly-spaced lattice with spacing `1/sigma`, letting
-   `(mu, sigma)` be solved exactly (`scratch/recover_normalization_params.py`).
-   **No such lattice was found**: across 4,608 (session, block, column)
-   cases tested (3 sessions from different eras, all their train blocks,
-   all 256 TX columns), only 3 showed constant spacing, and all 3 are
-   float32-precision artifacts (recovered `sigma` of exactly `2^24` /
-   `2^25`, the float32 mantissa limit, inverting to physiologically
-   absurd raw counts up to ~350 million) — not real lattices. A control
-   test confirmed the method works (0/108 SBP columns showed a lattice, as
-   expected for genuinely continuous data), so this is a real absence of
-   lattice structure in TX, not a broken detector. **The normalization
-   unit therefore remains unresolved — not because our tests weren't
-   sharp enough, but because the simplest premise (a fixed per-column
-   affine transform of integer counts) is not well supported by the data
-   as tested.** Plausible untested alternatives: a time-varying/adaptive
-   (e.g. rolling or exponentially-weighted) normalization; smoothing
-   applied to counts before normalization; or a transform other than
-   z-scoring. See `docs/DESIGN.md` section 9 for the full writeup. Do not
-   guess further without new evidence.
+   **This settles the earlier open question. It is NOT per-block, NOT
+   per-session, and NOT global — all three of those hypotheses, and the
+   evidence gathered testing them, were wrong about the *unit*, though
+   right to keep looking.** Both empirical tests we ran failed for
+   specific, now-understood reasons rather than by chance:
+     - **The lattice test** (`scratch/recover_normalization_params.py`,
+       2026-09-01) found no evenly-spaced values in any TX column because
+       it assumed one shared divisor (`sigma`) per column per block.
+       Under rolling normalization, **every sentence has its own
+       divisor** (recomputed from its own up-to-10-sentence window), so
+       even the *same* raw integer count maps to a different released
+       float value from one sentence to the next within a block. Integer
+       spike counts therefore never map onto a shared lattice, regardless
+       of how clean the underlying raw data actually was — the test's
+       premise (one fixed affine transform per block) was never going to
+       hold, independent of any float32 or sampling issue.
+     - **The per-block statistical residual of ~0.06** (rather than the
+       ~1e-6 an exact single-statistic block normalization would produce)
+       appeared because **a block contains many overlapping normalization
+       windows, not one shared statistic** — each sentence in the block
+       was normalized against a different, sentence-specific 10-sentence
+       window, so pooling a whole block's data and recomputing one mean/
+       std necessarily lands close to, but not exactly at, 0/1.
+
+   **Consequence for evaluation:** the first ~10 sentences of every
+   session are normalized on a window that hasn't yet filled to width 10
+   (as few as 1 prior sentence for the very first trial), so their
+   normalization statistics are noisier than later trials' — this is a
+   property of the released data, not something our pipeline introduces
+   or can remove. See `docs/DESIGN.md` sections 7, 6, and 11 for how this
+   affects the split design, the "what a rising PER curve means"
+   interpretation, and the warm-up-trials decision.
 
 **Left to us:**
 
@@ -314,7 +296,7 @@ The Kaggle terms explicitly permit repartitioning the train and validation data.
 
 ## 13. Our split design
 
-> **Revised in `docs/DESIGN.md` section 5:** the training cut point below
+> **Revised in `docs/DESIGN.md` section 7:** the training cut point below
 > (sessions 1–15) is now one of four swept cut points (1–5, 1–10, 1–15,
 > 1–20), not the fixed design. Everything below remains accurate as the
 > 1–15 case specifically. See `docs/DESIGN.md` for the current design and
@@ -388,10 +370,11 @@ The full published pipeline goes: neural features → GRU + CTC → phoneme sequ
 
 ## 17. Open questions
 
-- [x] Verify the 512-feature column boundaries empirically (official docs are off by one) — confirmed 64-wide blocks; see `docs/DESIGN.md` section 9, Task 1.
-- [x] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline — done; serious confound found, see `docs/DESIGN.md` section 9, Task 2.
-- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code — loaded and inspected (not yet run for inference); see `docs/DESIGN.md` section 9, Task 4b.
-- [x] Determine typical block sizes and whether block count per session varies systematically over time — done; see `docs/DESIGN.md` section 9, Task 4a.
-- [x] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound — resolved: adopted as the PRIMARY analysis (`docs/DESIGN.md` section 5, corpus stratification decision); 17/30 held-out sessions survive a 50-trial threshold (corrected count — see the next item), full day-offset range (+5 to +546d) and all four curve endpoints preserved; see `docs/DESIGN.md` section 9, Task 2 (this round).
-- [x] Resolve the CSV-vs-manifest trial-count discrepancy — resolved: goes both directions (not uniformly CSV ≥ actual), roughly proportional to corpus/partition size (not concentrated), and at least partly caused by confirmed partition misattribution (a Switchboard block's trials split across labeled `val` and unlabeled `test` were being counted as if fully labeled) rather than only QC drops. HDF5/manifest is authoritative for counts; CSV is authoritative for corpus labels. See `docs/DESIGN.md` section 9, Task 3 (this round).
-- [ ] Resolve the normalization unit (per-session vs. global) — **escalated, not just unresolved.** An exact arithmetic method (Task 1 this round) found the underlying premise (TX = raw integer counts under a fixed per-column affine transform) is not well supported by the data at all — no evenly-spaced lattice exists in the values, control-tested to confirm this isn't a broken detector. Block-level is ruled out; session vs. global cannot even be posed as a clean question until the transform itself is better understood. See section 9 above and `docs/DESIGN.md` section 9, Task 1 (this round) and its statistical-approach follow-up.
+- [x] Verify the 512-feature column boundaries empirically (official docs are off by one) — confirmed 64-wide blocks; see `docs/DESIGN.md` section 12, Task 1.
+- [x] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline — done; serious confound found, see `docs/DESIGN.md` section 12, Task 2.
+- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code — loaded and inspected (not yet run for inference); see `docs/DESIGN.md` section 12, Task 4b.
+- [x] Determine typical block sizes and whether block count per session varies systematically over time — done; see `docs/DESIGN.md` section 12, Task 4a.
+- [x] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound — resolved: adopted as the PRIMARY analysis (`docs/DESIGN.md` section 7, corpus stratification decision); 17/30 held-out sessions survive a 50-trial threshold (corrected count — see the next item), full day-offset range (+5 to +546d) and all four curve endpoints preserved; see `docs/DESIGN.md` section 12, Task 2 (round 2).
+- [x] Resolve the CSV-vs-manifest trial-count discrepancy — resolved: goes both directions (not uniformly CSV ≥ actual), roughly proportional to corpus/partition size (not concentrated), and at least partly caused by confirmed partition misattribution (a Switchboard block's trials split across labeled `val` and unlabeled `test` were being counted as if fully labeled) rather than only QC drops. HDF5/manifest is authoritative for counts; CSV is authoritative for corpus labels. See `docs/DESIGN.md` section 12, Task 3 (round 2).
+- [x] Resolve the normalization unit — **RESOLVED, 2026-09-02, by author correspondence, not by further empirical testing.** It is a rolling per-channel z-score over the previous up-to-10 sentences' speaking epochs (inclusive of the current sentence), causal, per Nicholas S. Card (corresponding author, Card et al. 2024). Not per-block, not per-session, not global — none of the three original hypotheses. This also explains why the lattice test (no shared divisor per block) and the ~0.06 per-block residual (overlapping per-sentence windows, not one shared statistic) both failed the way they did. See section 9 above and `docs/DESIGN.md` sections 7, 6, and 8.
+- [ ] Decide warm-up-trial exclusion (N trials to exclude from evaluation at the start of each session, if any) — must be decided before looking at any PER value; see `docs/DESIGN.md` section 11.

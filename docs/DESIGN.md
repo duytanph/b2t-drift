@@ -23,7 +23,7 @@ elsewhere and that looseness causes real mistakes here.
 - **"Our split"**: the temporal train/held-out boundary this project
   defines, cutting the 45 sessions by date into a training block (starting
   at session 1, `t15.2023.08.11`) and everything after it. The base case is
-  sessions 1–15 train / sessions 16–45 held out, but section 5 below sweeps
+  sessions 1–15 train / sessions 16–45 held out, but section 7 below sweeps
   this cut point across several values (1–5, 1–10, 1–15, 1–20) rather than
   fixing it at 15 — "our split" refers to this general temporal-split
   design, not one single fixed pair of session counts. This is entirely our
@@ -41,7 +41,7 @@ elsewhere and that looseness causes real mistakes here.
   split's training block) unless explicitly stated otherwise. It never
   means the official split's `val`/`test` files unless said so explicitly
   — those are a different withholding, from the official baseline, and (per
-  section 5) are not independent of each other or useful for drift.
+  section 7) are not independent of each other or useful for drift.
 
 ---
 
@@ -75,19 +75,133 @@ common and easy mistake — keep them separate in every results table.
 
 - **MEASUREMENT** — How fast does PER degrade as a function of days since
   calibration?
-- **ATTRIBUTION** — Why does it degrade? Candidate causes: channel
-  mortality (electrodes going quiet), marginal statistics drift with
-  preserved tuning (the signal shifts but the underlying code doesn't),
-  or genuine change in the neural code (the tuning itself changes). These
-  have different fixes — you don't renormalize your way out of channel
-  death, and you don't replace electrodes to fix a normalization offset.
+- **ATTRIBUTION** — Why does it degrade? See section 6 for the current
+  (2026-09-02) set of candidate causes — this was revised after the
+  normalization mechanism was confirmed by author correspondence; it is no
+  longer the four-cause list from earlier drafts.
 - **DECISION** — Given a fixed budget of participant time on a new day,
-  what is the best thing to spend it on: recalibrating a day-specific
-  input layer, collecting more labeled data, or something else?
+  what is the best thing to spend it on? See section 5 for the candidate
+  interventions ("arms") this project compares.
 
 ---
 
-## 5. Split design and rationale
+## 5. Recalibration strategies (Question 3 arms)
+
+The candidate interventions for the DECISION question, in increasing order
+of participant time cost. Each targets a different subset of the
+attribution causes in section 6.
+
+**Arm 1, "recompute per-session z-score statistics," is retired as an
+intervention.** It is not something we would do — the released data
+already does something strictly better: a continuous rolling per-channel
+z-score over the previous up-to-10 sentences, recomputed sentence by
+sentence within every session (`docs/DATASET.md` section 9, confirmed by
+author correspondence 2026-09-02). Recomputing one statistic per session
+would be a *coarser*, less current version of what's already there, and it
+isn't a participant-time cost at all — it happens automatically, for free,
+as a property of the released data. There is nothing left for this arm to
+contribute, so it is removed rather than kept as a strawman.
+
+The remaining arms, renumbered:
+
+- **Arm 0 — no adaptation (baseline).** Use the day-0 calibrated decoder
+  unmodified on a new day. Zero participant time, zero labels. This is
+  what the drift curve itself measures.
+- **Arm 1 (was Arm 2) — unsupervised distribution alignment** (e.g. CORAL,
+  Procrustes). **Zero labels** — only unlabeled neural data from the new
+  day is needed. **Targets subspace rotation** (section 6): if the
+  population-activity manifold has rotated in 256-d space but its
+  per-channel marginal statistics are already handled by the rolling
+  z-score, a linear alignment estimated from unlabeled data alone can in
+  principle undo the rotation.
+- **Arm 2 (was Arm 3) — fit a new day-specific input layer, freeze the
+  rest of the network, N labels.** Needs labeled data from the new day
+  (the participant speaking N known sentences). **Targets both tuning
+  change and subspace rotation** — a learned affine layer (structurally
+  identical to the `day_weights`/`day_biases` layers already found in the
+  official checkpoint, `docs/DESIGN.md` section 12, Task 4b) has more
+  degrees of freedom than a purely unsupervised alignment and can partially
+  compensate for a shifted phoneme-to-channel mapping, not just a rotation.
+- **Arm 3 (was Arm 4) — fine-tune the whole network, N labels.** Highest
+  participant-time cost (labels needed) and highest compute cost.
+  **Targets everything** — including tuning change and rotation, and in
+  principle any deeper change the other arms cannot reach — but carries
+  **catastrophic-forgetting risk at small N**: with too little new-day
+  data, whole-network fine-tuning can overfit to the N calibration
+  sentences and lose generalization the frozen-backbone arms would have
+  kept.
+
+---
+
+## 6. What a rising PER curve now means
+
+Revised 2026-09-02, after the normalization mechanism was confirmed by
+author correspondence (`docs/DATASET.md` section 9). This changes what the
+ATTRIBUTION question (section 4) can and cannot conclude, and is the
+reasoning behind the arms in section 5.
+
+**Z-scoring is a per-channel affine transform, so it can only undo
+per-channel affine changes.** It removes absolute firing-rate shifts
+(offset) and variance shifts (gain), *per channel, continuously, every
+sentence*, because that is exactly what a rolling per-channel mean/std
+normalization is defined to do. It does **not** remove:
+- which channels respond to which phonemes (a permutation- or
+  mixing-level fact, not a scale),
+- inter-channel correlation structure (correlation is scale-invariant —
+  dividing two channels by their own standard deviations doesn't change
+  how correlated they are),
+- the geometry of population activity (a rotation or shear in 256-d
+  space is not undone by 256 independent 1-d rescalings), or
+- temporal structure within a sentence.
+
+**The attribution candidates therefore reduce from four to three:**
+
+- **CHANNEL DEATH** — an electrode stops producing usable signal. Note a
+  non-obvious interaction with the confirmed normalization: z-scoring may
+  **amplify** channel death rather than hide it. Dividing a channel whose
+  true variance has collapsed toward zero by its own (near-zero) estimated
+  std inflates whatever residual noise remains back up to unit variance —
+  the channel doesn't disappear from the normalized signal, it turns into
+  amplified noise. Whether this actually happens depends on epsilon/
+  clipping choices in the release pipeline that we have not inspected;
+  **this should be checked empirically** (e.g. does per-channel variance,
+  computed just before normalization if recoverable, or channel-level
+  behavior after normalization, show any channels behaving like amplified
+  noise) before relying on it as an explanation.
+- **TUNING CHANGE** — the mapping from phoneme to channel response shifts,
+  e.g. because the electrode senses a different local neural population as
+  tissue and electrode geometry change over months. Not fixable by any
+  rescaling, since it's a change in *which* signal is present, not its
+  scale. Targeted by Arm 2 (section 5), which has enough degrees of
+  freedom to partially compensate.
+- **SUBSPACE ROTATION** — population activity occupies a low-dimensional
+  manifold within the 256-d channel space, and that manifold's orientation
+  has changed. Correctable in principle by a linear map applied across
+  channels — this is the premise of Arm 1 (section 5), and also within
+  reach of Arm 2.
+
+**Marginal drift (gain/offset) is removed from view by the rolling
+normalization and cannot be studied with this release.** It was originally
+a fourth candidate cause; it no longer is, because the released data has
+already had it continuously corrected out, every sentence, before we ever
+see it.
+
+**Resulting strength of the measurement.** Any degradation our drift curve
+shows has already survived a normalization that re-adapts every ~10
+sentences — so it **cannot** be attributed to per-channel gain or offset
+change; whatever is left over is necessarily channel death, tuning change,
+or subspace rotation (or some mix). Additionally, because the
+normalization is causal (only past and current sentences, matching what a
+real-time system can actually do — `docs/DATASET.md` section 9), our
+measurement describes a **realistically configured decoder**, not one that
+is ignoring an obvious fix a deployed system wouldn't have access to
+either. The drift curve is a meaningful, non-trivial measurement precisely
+*because* the easy explanation has already been ruled out by the data
+itself, not by our own preprocessing choices.
+
+---
+
+## 7. Split design and rationale
 
 ### Cut-point sweep, not a single fixed cut
 
@@ -96,7 +210,7 @@ sessions 1–15. **The cut point is now swept over sessions 1–5, 1–10, 1–1
 and 1–20**, training a separate Model B for each and producing **four**
 drift curves, not one.
 
-**Why this is affordable.** The Task 3 GPU benchmark (section 9) showed
+**Why this is affordable.** The Task 3 GPU benchmark (section 12) showed
 the full baseline architecture trains in ~1.3 hours per 10,000 steps on
 this machine. Four training runs cost roughly 6 hours total — affordable on
 a single machine, not a reason to compromise on model size or cut count.
@@ -171,20 +285,20 @@ session 16.
 
 **Switchboard-only is the PRIMARY analysis; all-trials (every corpus
 pooled) is reported as a secondary curve.** Justification: the training
-block is ~87–88% Switchboard by trial count (`docs/DESIGN.md` section 9,
-Task 2 finding) while at least 8 of the 30 base-case held-out sessions
-contain **zero** Switchboard trials at all — an all-trials curve conflates
-task-distribution shift (evaluating on corpora the model never trained on)
-with neural drift, which is exactly the confound this project exists to
-avoid mistaking for its own subject. Switchboard-only removes the worst of
-that confound while preserving the full day-offset range and, critically,
-all six of the 2025 sessions (see Task 2 findings in section 9).
+block is ~87–88% Switchboard by trial count (section 12, Task 2 finding)
+while at least 8 of the 30 base-case held-out sessions contain **zero**
+Switchboard trials at all — an all-trials curve conflates task-distribution
+shift (evaluating on corpora the model never trained on) with neural
+drift, which is exactly the confound this project exists to avoid mistaking
+for its own subject. Switchboard-only removes the worst of that confound
+while preserving the full day-offset range and, critically, all six of the
+2025 sessions (see Task 2 findings in section 12).
 
 **The ≥50-labeled-Switchboard-trial viability threshold was fixed in
 advance of seeing any PER values** (during the Task 2 feasibility check,
-section 9) — a session below it is excluded from the primary curve because
-PER on fewer than 50 sentences is too noisy to plot as a meaningful curve
-point, not because of how it happens to score.
+section 12) — a session below it is excluded from the primary curve
+because PER on fewer than 50 sentences is too noisy to plot as a
+meaningful curve point, not because of how it happens to score.
 
 ### Why the official split cannot measure drift
 
@@ -202,15 +316,15 @@ section 3, is a pipeline check only.)
 
 `data/external/t15_pretrained_rnn_baseline/checkpoint/args.yaml` lists all
 45 sessions under `dataset.sessions` — confirmed by direct inspection
-(Task 4b, section 9). It has seen every session in the dataset and has no
+(Task 4b, section 12). It has seen every session in the dataset and has no
 held-out future. It remains useful for (a) validating our evaluation code
 against a known-good model, and (b) inspecting its 45 learned per-session
 day-layers as a record of how much per-session correction the official
-baseline needed — see Task 4 findings in section 9.
+baseline needed — see Task 4 findings in section 12.
 
 ---
 
-## 6. Pipeline constraints derived from data inspection
+## 8. Pipeline constraints derived from data inspection
 
 - **Lazy HDF5 loading.** The dataset is ~12 GB against a 16 GB system RAM
   budget. `T15Dataset` must not hold everything in memory; it has to read
@@ -218,36 +332,41 @@ baseline needed — see Task 4 findings in section 9.
 - **Length-bucketed batching.** `n_time_steps` spans 138–1025+ bins, a
   7.4x range. Random batching wastes most of each batch on padding —
   batch by similar length instead.
-- **Block-level normalization.** Array statistics shift within a single
-  session, not just across sessions, so z-scoring must be computed per
-  block, not per session. **Superseded as of the normalization-unit
-  follow-up (2026-09-01), and further clarified by the Task 1 arithmetic
-  investigation (2026-09-01, section 9):** the raw `input_features` values
-  in the released HDF5 are already z-scored (every sampled column has mean
-  ≈ 0, std ≈ 1), and the official training code applies no further
-  normalization at load time or in the model — see `docs/DATASET.md`
-  section 9. Block-level is ruled out as the normalization unit; an attempt
-  to settle session-vs-global arithmetically found that TX values do not
-  even form the evenly-spaced integer lattice the arithmetic method
-  depends on, so the question could not be settled at all by that method —
-  see Task 1 findings in section 9. **Do not implement `data/normalize.py`
-  as a from-scratch per-block (or any-unit) z-score** — the values may
-  already be adequately normalized, and we do not yet understand the
-  transform well enough to safely reverse or duplicate it. Revisit only
-  after a genuinely new source of evidence (e.g. contacting the dataset
-  authors, or finding pipeline code we haven't yet located).
+- **Normalization is already applied, and is NOT block/session/global —
+  it's a rolling per-channel, per-sentence window. [RESOLVED 2026-09-02,
+  by author correspondence — see `docs/DATASET.md` section 9.]** Earlier
+  drafts of this document assumed normalization was left to us, then
+  (once the values were found to already be z-scored) spent two rounds of
+  empirical investigation trying to determine whether the unit was
+  per-block, per-session, or global — never finding a clean answer,
+  because none of the three was correct. Nicholas S. Card (corresponding
+  author, Card et al. 2024 NEJM) confirmed by email: `input_features` are
+  z-scored per channel using a rolling window of up to the previous 10
+  sentences' speaking epochs, inclusive of the current sentence — causal,
+  matching what a real-time system can do. This also explains, precisely,
+  why both empirical tests failed the way they did: the lattice test
+  assumed one shared divisor per block (there isn't one — every sentence
+  has its own), and the ~0.06 per-block statistical residual came from
+  pooling many overlapping per-sentence windows into one recomputed
+  statistic. **`data/normalize.py` should not implement any block/session/
+  global z-score** — the values are already normalized, by a mechanism
+  outside our control, and reproducing or reversing it would require
+  reconstructing the exact rolling-window procedure (out of scope unless a
+  specific downstream need arises). See section 6 for what this means for
+  interpreting the drift curve, and section 10 for the resulting
+  evaluation caveats (early-session trials, elapsed-time confound).
 - **GPU budget is not a constraint on model size.** The Task 3 benchmark
-  (section 9) showed the full baseline architecture (5 layers, 1024
+  (section 12) showed the full baseline architecture (5 layers, 1024
   hidden) trains in ~1.3 hours per 10,000 steps at fp32 on this machine,
   with no OOM risk even at batch=64. This is also what makes the section
-  5 cut-point sweep affordable (~6 hours for all four runs). Ablations and
+  7 cut-point sweep affordable (~6 hours for all four runs). Ablations and
   the main drift-curve runs can use the full-size model throughout — there
   is no need to fall back to the "small" (3 layer, 512 hidden) config to
   fit time or memory budgets.
 
 ---
 
-## 7. Metrics
+## 9. Metrics
 
 **PER (phoneme error rate) is primary.** It measures the neural decoder in
 isolation, directly from `seq_class_ids`, with no downstream language model
@@ -264,7 +383,7 @@ without saying why.
 
 ---
 
-## 8. Stated limitations
+## 10. Stated limitations
 
 - **Single participant.** Everything here is one person's brain. Nothing
   generalizes across subjects.
@@ -277,10 +396,58 @@ without saying why.
   for.
 - **Test partitions are unlabeled.** 1,450 trials (13% of the dataset) are
   unusable for supervised work — neither trainable nor scorable.
+- **Normalization is sentence-indexed, not time-indexed.** The rolling
+  window (section 8, `docs/DATASET.md` section 9) counts *sentences*, and
+  sessions differ in how many trials they contain (`docs/DESIGN.md`
+  section 12, Task 4a: median ~42 trials/block, and block count per
+  session varies). Two sessions the same number of *days* apart from the
+  training block do not necessarily have gone through the same number of
+  normalization-window updates. **Check whether per-session PER correlates
+  with session trial count before attributing any effect on the drift
+  curve to elapsed time** — a correlation with trial count rather than
+  (or in addition to) day-offset would indicate a normalization-exposure
+  confound, not pure temporal drift.
+- **The first ~10 sentences of each session are normalized on a
+  still-filling window** (as few as 1 prior sentence for the very first
+  trial of a session), so their normalization statistics are noisier than
+  later trials'. **Elevated PER on early trials in a session is expected
+  to be a normalization artifact, not evidence of drift** — do not
+  interpret it as such. See section 11 for the resulting warm-up-trials
+  decision this implies for evaluation.
+- **ALS progression over the 20-month recording span may change what the
+  participant can attempt to articulate**, independent of anything
+  happening to the electrodes. This is **indistinguishable from electrode
+  degradation in this dataset** — both would show up as declining decode
+  quality over time, and nothing here lets us separate "the signal is
+  harder to read" from "the signal itself is different because the
+  underlying motor attempt has changed." Neither this dataset nor this
+  project's design can resolve that ambiguity; it should be stated
+  alongside any drift-curve result, not resolved away.
 
 ---
 
-## 9. Findings from Tasks 1–4
+## 11. Open decisions before Week 1
+
+Decisions that must be made — and the rationale recorded here — **before**
+any implementation work in `src/b2t_drift/data`, `models`, or `training`
+begins, and in the case of anything touching evaluation, **before looking
+at any PER value**, per the validation-set rule in section 7.
+
+- **WARM-UP TRIALS.** Decide whether to exclude the first N trials of each
+  session from evaluation (per the normalization-artifact limitation in
+  section 10), and if so, what N. This decision — and its rationale —
+  must be made and recorded in this section **before** any PER values from
+  any model are examined. As of this writing the decision has not yet been
+  made; this is a placeholder to be filled in when it is, not a decision by
+  omission. Candidate considerations for whoever makes this call: the
+  rolling window reaches full width at sentence 10, so N=10 is a natural
+  starting candidate, but the right choice should weigh how much of each
+  held-out session's already-small trial budget (as few as 80 trials in
+  the earliest held-out sessions) a fixed N would consume.
+
+---
+
+## 12. Findings from Tasks 1–4
 
 Investigation scripts live in `scratch/` (gitignored, not committed).
 Figures referenced below are committed under `figures/`.
@@ -326,7 +493,9 @@ Figures referenced below are committed under `figures/`.
   consistent with small integer counts having already been passed through
   a fixed per-column affine transform before release. This contradicted
   the earlier draft of `docs/DATASET.md` section 9 ("Left to us:
-  Normalization"), which has since been corrected there.
+  Normalization"), which has since been corrected there, and — as of
+  2026-09-02 — fully resolved by author correspondence (see section 8
+  above).
 - Figure: `figures/feature_layout_correlation.png`
 
 ### Task 2 — corpus composition confound check (2026-09-01)
@@ -346,7 +515,7 @@ Figures referenced below are committed under `figures/`.
   100% 50-Word). For those 8 sessions, every evaluated trial comes from a
   corpus absent from training — any PER measured there conflates neural
   drift with pure out-of-distribution task shift and cannot be
-  interpreted as a clean drift estimate. This is why section 5 adopts
+  interpreted as a clean drift estimate. This is why section 7 adopts
   Switchboard-only as the primary analysis.
 - **Era concentration:** Freq words is confined to 2023-10-22 through
   2023-12-29 (11 sessions); Harvard to 2023-10-20 through 2023-11-03 (3
@@ -391,7 +560,7 @@ timed steps).
   architecture's cost, not the official baseline's.
 - No `GradScaler` was used for the fp16 runs (acceptable for a pure speed
   benchmark on random targets; a real fp16 training run should use one).
-- **This benchmark is why section 5's four-cut sweep is affordable** — see
+- **This benchmark is why section 7's four-cut sweep is affordable** — see
   the sweep rationale above.
 
 ### Task 4 — block structure and pretrained checkpoint (2026-09-01)
@@ -433,10 +602,10 @@ From the state_dict shapes:
   .. `day_biases.44` (each `1x512`) — one per-session affine input
   transform, applied before the shared GRU. This is a direct architectural
   confirmation of the "day-specific input layer" concept in
-  `GLOSSARY.md`.
+  `GLOSSARY.md`, and structurally the same shape as Arm 2 in section 5.
 - **`args.yaml` confirms `dataset.sessions` lists all 45 sessions** —
   direct confirmation that this checkpoint cannot be used for the drift
-  curve (see section 5 above). It also lists `dataset_probability_val`, a
+  curve (see section 7 above). It also lists `dataset_probability_val`, a
   0/1 flag per session; the 4 sessions flagged `0` are exactly the 4
   train-only sessions we already knew about (`t15.2023.08.11`,
   `t15.2024.03.03`, `t15.2024.04.25`, `t15.2024.04.28`) — independent
@@ -483,7 +652,10 @@ mean/std at block, session (train-only and full train+val+test), and
   *why* this statistical test couldn't cleanly resolve session-vs-global:
   the premise the arithmetic method depends on (a simple fixed affine
   transform of integer counts) does not hold cleanly enough to test either
-  hypothesis to machine precision.
+  hypothesis to machine precision. **Both are now moot** — resolved
+  2026-09-02 by author correspondence: it's a rolling per-sentence window,
+  which is why no fixed-unit hypothesis could ever have fit cleanly. See
+  section 8 above.
 - Confirmed via the official repo's `model_training/dataset.py` and
   `model_training/rnn_model.py` (fetched from GitHub) that no further
   normalization is applied downstream of the HDF5 files — whatever
@@ -494,7 +666,7 @@ mean/std at block, session (train-only and full train+val+test), and
   and zero bias — not a fixed normalization step, and not the source of
   the pre-release z-scoring.
 
-### Task 1 (this round) — settling the normalization unit arithmetically (2026-09-01)
+### Task 1 (round 2) — settling the normalization unit arithmetically (2026-09-01)
 
 Attempted to replace the statistical test above with an exact one: TX
 columns are integer spike counts before release, so if
@@ -537,19 +709,15 @@ sessions, all train blocks (18 blocks), all 256 TX columns
   saved with the per-(session, block, column) test results for the record,
   including the 3 float32-artifact false positives, but it is not a usable
   parameter table.
-- **What this means for the open question:** the normalization unit
-  (global vs. per-session) remains unresolved, but for a more fundamental
-  reason than "the statistical test wasn't sharp enough" — the simplest
-  hypothesis about *what kind* of transform produced these values (a fixed
-  per-column affine rescaling of integer counts) is itself not well
-  supported by the data. Plausible alternatives, none confirmed:
-  time-varying/adaptive (e.g. rolling or exponentially-weighted) online
-  normalization; smoothing or filtering applied to the counts before
-  normalization; or a transform other than z-scoring entirely. Do not
-  guess further without new evidence (e.g. contacting the dataset authors
-  or finding source code we have not yet located).
+- **Explained in full, 2026-09-02:** this non-result was exactly correct.
+  Nicholas S. Card confirmed the real transform uses a *different divisor
+  per sentence* (a rolling up-to-10-sentence window), so integer counts
+  never land on one shared per-block or per-session lattice regardless of
+  how clean the raw counts were — the lattice test's premise (one fixed
+  affine transform per block) could not have succeeded no matter how
+  precisely it was run. See section 8 above.
 
-### Task 2 (this round) — Switchboard survivor table, corrected (2026-09-01)
+### Task 2 (round 2) — Switchboard survivor table, corrected (2026-09-01)
 
 Rebuilt the Switchboard-viability table from Task 2 (prior round) using the
 method the Task 3 discrepancy investigation (below) showed is necessary:
@@ -575,7 +743,7 @@ rather than trusting the CSV's own per-block trial counts
   similarly overcounted by the CSV).
 - Figure (redrawn with the corrected numbers): `figures/switchboard_trials_per_session.png`.
 
-### Task 3 (this round) — resolving the CSV-vs-manifest discrepancy (2026-09-01)
+### Task 3 (round 2) — resolving the CSV-vs-manifest discrepancy (2026-09-01)
 
 Compared CSV block-level trial counts against actual per-block HDF5 trial
 counts (not just per-session totals, as the prior round's check did) —
