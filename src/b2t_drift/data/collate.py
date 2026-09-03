@@ -194,6 +194,16 @@ class LengthBucketedSampler(Sampler[list[int]]):
     never as its `sampler` argument (a plain `sampler` yields one index
     at a time; a `batch_sampler` yields a whole batch's worth at once,
     which is what this class does).
+
+    `__iter__` IS PURE: it reads `self._epoch` but never modifies it.
+    **A training loop MUST call `set_epoch(epoch)` itself, once per
+    epoch.** Without it, every epoch gets the exact same ordering and
+    bucket composition -- `__iter__` used to advance an internal counter
+    automatically on every call so this "just worked" without
+    `set_epoch`, but that made two harmless-looking operations (calling
+    `iter()` twice on the same sampler, or inspecting it) silently change
+    its future behavior. State changes now happen only where they're
+    visible: in `set_epoch`.
     """
 
     def __init__(
@@ -203,6 +213,7 @@ class LengthBucketedSampler(Sampler[list[int]]):
         shuffle: bool = True,
         seed: int = 0,
         bucket_noise: float = 0.1,
+        drop_last: bool = False,
     ) -> None:
         """Build a length-bucketed batch sampler over `trial_ids`.
 
@@ -211,73 +222,85 @@ class LengthBucketedSampler(Sampler[list[int]]):
                 `Dataset` this sampler will be paired with (indices
                 yielded by this sampler are positions into `trial_ids`,
                 which must line up with the `Dataset`'s own indexing).
-            batch_size: Trials per batch. The final batch may be smaller
-                if `len(trial_ids)` is not a multiple of `batch_size`.
+            batch_size: Trials per batch.
             shuffle: If True (the default), shuffle the ORDER of batches
                 each epoch. Never shuffles which trials share a batch --
                 that composition is fixed by the length sort (plus
                 `bucket_noise`).
-            seed: Base RNG seed. Combined with an internal epoch counter
-                (see `set_epoch`) so that batch order and bucket-noise
+            seed: Base RNG seed. Combined with the epoch set via
+                `set_epoch` so that batch order and bucket-noise
                 composition are both reproducible for a given
-                `(seed, epoch)` pair, and both actually differ from one
-                epoch to the next by default.
+                `(seed, epoch)` pair.
             bucket_noise: Fraction of a trial's own `n_time_steps` used
                 as the scale of random jitter added to its sort key
                 (uniform in `[-bucket_noise, +bucket_noise] *
                 n_time_steps`). Without this, the same trials would be
                 batched together every single epoch (the length sort is
-                deterministic), which correlates gradient noise across
-                epochs -- two epochs would see literally the same
-                per-batch composition, just possibly in a different
-                order. `0.1` means each trial's sort position can drift
-                by up to +/-10% of its own length, enough to shuffle
-                batch membership near bucket boundaries without
-                destroying the overall length-similarity grouping.
+                deterministic) whenever the epoch DOES change, which
+                correlates gradient noise across epochs -- two epochs
+                would see literally the same per-batch composition, just
+                possibly in a different order. `0.1` means each trial's
+                sort position can drift by up to +/-10% of its own
+                length, enough to shuffle batch membership near bucket
+                boundaries without destroying the overall
+                length-similarity grouping.
+            drop_last: If True, drop a final batch that has fewer than
+                `batch_size` trials rather than yielding it short.
+                **Recommended True for training**: at `batch_size=32`
+                against the 3,969-trial TRAIN block (`docs/DATASET.md`
+                section 13), `3969 = 124*32 + 1` -- the last batch of an
+                epoch would contain exactly 1 trial, which gives an
+                unusually noisy gradient and would break any layer that
+                relies on batch statistics (e.g. batch normalization,
+                not currently used here, but a future addition could add
+                one without knowing this constraint exists). **Required
+                False (the default) for evaluation**: every held-out
+                trial must be scored, including whichever ones would
+                fall in a short final batch -- dropping trials from PER
+                evaluation silently biases the metric.
         """
         self.trial_ids = tuple(trial_ids)
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.seed = seed
         self.bucket_noise = bucket_noise
+        self.drop_last = drop_last
         self._epoch = 0
 
     def set_epoch(self, epoch: int) -> None:
-        """Explicitly set the epoch used to seed this epoch's ordering.
+        """Set the epoch used to seed the NEXT `__iter__` call's ordering.
 
         Args:
-            epoch: Epoch number. Combined with `seed` to derive this
-                call's RNG state, so `set_epoch(0)` followed by
+            epoch: Epoch number. Combined with `seed` to derive the RNG
+                state `__iter__` will use, so `set_epoch(0)` followed by
                 `set_epoch(1)` reproducibly gives two DIFFERENT batch
                 orderings/compositions, and calling `set_epoch(0)` again
                 later reproduces the first one exactly.
 
         Follows the same convention as
-        `torch.utils.data.distributed.DistributedSampler.set_epoch`. Not
-        required to be called -- `__iter__` also self-advances an
-        internal epoch counter on every call, so a plain
-        `for epoch in range(n): for batch in loader: ...` training loop
-        gets a different ordering each epoch even without ever calling
-        this explicitly. Call it directly only when reproducing or
-        controlling a specific epoch's ordering matters (e.g. tests).
+        `torch.utils.data.distributed.DistributedSampler.set_epoch`.
+        **This is the ONLY way this sampler's ordering changes across
+        epochs** -- `__iter__` itself is pure (see the class docstring).
+        A training loop that never calls this will silently reuse epoch
+        0's ordering and bucket composition forever; call it once at the
+        start of every epoch, before iterating the `DataLoader`.
         """
         self._epoch = epoch
 
     def __iter__(self) -> Iterator[list[int]]:
         """Yield one epoch's worth of batches, each a list of indices.
 
-        Every call uses (and then advances) this sampler's internal
-        epoch counter, so consecutive calls -- e.g. one per epoch, which
-        is how `DataLoader` uses a `batch_sampler` -- see different
-        `bucket_noise` draws and a different batch order by default,
-        without the caller needing to call `set_epoch` itself.
+        Pure with respect to `self._epoch`: reads it, does not modify
+        it. Calling this twice in a row without an intervening
+        `set_epoch` yields the SAME batches both times (see the class
+        docstring for why this matters).
 
         Yields:
             Lists of indices into `trial_ids`, one list per batch, in
-            batch-size chunks of at most `self.batch_size`.
+            batch-size chunks of at most `self.batch_size`. The final,
+            possibly-short chunk is omitted if `self.drop_last` is True.
         """
         rng = random.Random(self.seed + self._epoch)
-        self._epoch += 1
 
         n = len(self.trial_ids)
         if self.bucket_noise:
@@ -291,6 +314,8 @@ class LengthBucketedSampler(Sampler[list[int]]):
 
         order = sorted(range(n), key=lambda i: keys[i])
         batches = [order[i : i + self.batch_size] for i in range(0, n, self.batch_size)]
+        if self.drop_last and batches and len(batches[-1]) < self.batch_size:
+            batches = batches[:-1]
 
         if self.shuffle:
             rng.shuffle(batches)
@@ -299,4 +324,7 @@ class LengthBucketedSampler(Sampler[list[int]]):
 
     def __len__(self) -> int:
         """Number of batches this sampler yields per epoch."""
-        return (len(self.trial_ids) + self.batch_size - 1) // self.batch_size
+        n = len(self.trial_ids)
+        if self.drop_last:
+            return n // self.batch_size
+        return (n + self.batch_size - 1) // self.batch_size

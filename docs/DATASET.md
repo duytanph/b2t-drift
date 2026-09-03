@@ -182,22 +182,65 @@ Source of the mapping: the Brain-to-Text '25 Kaggle data page, as `LOGIT_TO_PHON
 Applied by the authors before release:
 
 1. Broadband 30 kHz acquisition
-2. High-pass filtering to isolate the spike band
-3. Threshold crossing detection at −4.5 × RMS
+2. High-pass filtering to isolate the spike band. Per Willett et al. 2023
+   (*Nature* 620:1031–1036 — the T12 methodological predecessor, `docs/DATASET.md`
+   section 16), this is a **band-pass filter at 250–5000 Hz, acausal
+   4th-order Butterworth** — published source, not independently verified
+   against this T15 release, but the standard convention for this lab's
+   pipeline and the most concrete public description of the filtering
+   step we have.
+3. **Threshold crossing detection at −4.5 × RMS, where RMS is re-estimated
+   from the PRECEDING BLOCK's neural data.
+   [verified — author correspondence, 2026-09-03].** Confirmed by email
+   with Nicholas S. Card: the −4.5 × RMS detection threshold is not fixed
+   for the whole recording, or even for a whole session — it is
+   recomputed from the immediately preceding block's data. Blocks are
+   usually ~50 trials (sometimes shorter — `docs/DATASET.md` section 11
+   / `docs/DESIGN.md` section 12, Task 4a: median ~42 trials/block,
+   range ~22–50), so **the detection threshold is effectively
+   re-estimated roughly every 50 sentences throughout the 20-month
+   recording period.** This is a second, independent adaptive mechanism
+   in the pipeline, upstream of and separate from the rolling z-score in
+   item 7 below — see `docs/DESIGN.md` section 6 ("Three-stage
+   adaptation") for what each one can and cannot remove from the drift
+   signal.
+
+   Published context on this threshold, from Willett et al. 2023 (not
+   independently verified against T15, but describing the same
+   methodological lineage):
+     - Background (non-spike) activity RMS averaged **30.8 microvolts**.
+     - Electrodes with a mean threshold-crossing rate **≥ 2 Hz** were
+       considered to have spiking activity — a deliberately conservative
+       criterion for "this electrode is alive."
+     - Parameter sweeps in that work suggested **−3.5 × RMS might perform
+       slightly better than −4.5 × RMS** — i.e. the −4.5 convention used
+       here is a standard choice, not a demonstrated optimum. Worth
+       remembering before treating "−4.5" as a load-bearing constant in
+       any analysis.
 4. Spike band power computation
 5. Binning to 20 ms
 6. De-identification (the Dryad deposit states it contains no personal or identifiable information)
-7. **Normalization (z-scoring), by a rolling per-sentence window.
-   [verified — author correspondence, 2026-09-02].** Confirmed by email
-   with Nicholas S. Card, corresponding author of Card et al. 2024 (NEJM):
-   `input_features` are z-scored **per channel**, using a **rolling
-   window of up to the previous 10 sentences' speaking epochs, inclusive
-   of the current sentence**. Sentence 5 is normalized on statistics from
-   sentences 1–5; sentence 10 on sentences 1–10; sentence 15 on sentences
-   5–15; and so on — the window fills up to width 10 and then slides.
-   This is **causal**: only past and current data are used, matching what
-   a real-time online system can actually do (it cannot normalize against
-   future sentences it hasn't seen yet).
+7. **Normalization (z-scoring), by a rolling per-sentence window of the
+   preceding 20 sentences.
+   [verified — author correspondence, 2026-09-03; window width corrected
+   from an earlier reply].** Confirmed by email with Nicholas S. Card,
+   corresponding author of Card et al. 2024 (NEJM): `input_features` are
+   z-scored **per channel**, using a **rolling window of up to the
+   previous 20 sentences' speaking epochs, inclusive of the current
+   sentence**. This is **causal**: only past and current data are used,
+   matching what a real-time online system can actually do (it cannot
+   normalize against future sentences it hasn't seen yet).
+
+   > **Provenance note, kept rather than silently overwritten**: Card's
+   > first reply (2026-09-02) said the window was **10** sentences; a
+   > follow-up email (2026-09-03) corrected this to **20** — the lab uses
+   > both 10 and 20 internally for different purposes, and the Dryad
+   > release specifically uses 20. All statements elsewhere in this repo
+   > that cite "10 sentences" (e.g. earlier `docs/DESIGN.md` Findings
+   > entries dated 2026-09-02) describe the FIRST, now-superseded answer
+   > and should be read with this correction in mind rather than trusted
+   > as the final number. The *mechanism* (rolling, causal, per-channel)
+   > was correct from the first reply; only the window width changed.
 
    **This settles the earlier open question. It is NOT per-block, NOT
    per-session, and NOT global — all three of those hypotheses, and the
@@ -208,7 +251,7 @@ Applied by the authors before release:
        2026-09-01) found no evenly-spaced values in any TX column because
        it assumed one shared divisor (`sigma`) per column per block.
        Under rolling normalization, **every sentence has its own
-       divisor** (recomputed from its own up-to-10-sentence window), so
+       divisor** (recomputed from its own up-to-20-sentence window), so
        even the *same* raw integer count maps to a different released
        float value from one sentence to the next within a block. Integer
        spike counts therefore never map onto a shared lattice, regardless
@@ -219,13 +262,13 @@ Applied by the authors before release:
        ~1e-6 an exact single-statistic block normalization would produce)
        appeared because **a block contains many overlapping normalization
        windows, not one shared statistic** — each sentence in the block
-       was normalized against a different, sentence-specific 10-sentence
-       window, so pooling a whole block's data and recomputing one mean/
-       std necessarily lands close to, but not exactly at, 0/1.
+       was normalized against a different, sentence-specific window, so
+       pooling a whole block's data and recomputing one mean/std
+       necessarily lands close to, but not exactly at, 0/1.
 
-   **Consequence for evaluation:** the first ~10 sentences of every
-   session are normalized on a window that hasn't yet filled to width 10
-   (as few as 1 prior sentence for the very first trial), so their
+   **Consequence for evaluation:** the first ~20 sentences of every
+   session are normalized on a window that hasn't yet filled to its full
+   width (as few as 1 prior sentence for the very first trial), so their
    normalization statistics are noisier than later trials' — this is a
    property of the released data, not something our pipeline introduces
    or can remove. See `docs/DESIGN.md` sections 7, 6, and 11 for how this
@@ -239,11 +282,20 @@ Applied by the authors before release:
    3 sessions spanning the recording period
    (`scratch/investigate_feature_clipping.py`): global max is exactly
    `10.0` (22,539 of ~249M inspected values sit exactly at the clip,
-   0.009%), global min is `-3.51` — **no value in the sample equals
-   exactly `-10.0`.** This was not mentioned in the author correspondence
-   about normalization (section 7 above); it is an independent,
+   0.009%). This was not mentioned in the author correspondence about
+   normalization (item 7 above); it is an independent,
    empirically-confirmed detail of the release pipeline, not something
    Card's email described.
+
+   > **CORRECTION, stated explicitly rather than silently fixed**: an
+   > earlier note here attributed the global feature minimum, `-3.5107`,
+   > to a threshold-crossing (TX) channel and drew a firing-rate
+   > inference from it. **That value came from column 278, which is
+   > SBP, not TX** (`scratch/investigate_channel_floor.py`) — SBP is
+   > continuous power, not a spike count, so a Poisson count-based
+   > inversion applied to it was never valid regardless of anything
+   > else. The corrected, per-group analysis is items (b)–(e) below. No
+   > value in the ~500-trial sample equals exactly `-10.0`, TX or SBP.
 
    The clip is **asymmetric in observed behavior**, not necessarily in the
    pipeline's programmed bounds: TX (spike counts) and SBP (power) are
@@ -267,6 +319,57 @@ Applied by the authors before release:
    clip-saturation rate per channel correlate with other channel-health
    indicators, and does it change over session date), not an established
    finding — nothing in this section confirms it actually happens.
+
+9. **Raw spike counts are recoverable, exactly, per (sentence, channel).
+   [verified — empirical, 2026-09-03].** Follow-up to the correction in
+   item 8, and to item 7's per-sentence normalization mechanism
+   (`scratch/investigate_channel_floor.py`, 501 trials, 3 sessions
+   spanning the recording period).
+
+   **(b) TX and SBP per-channel minima are very different distributions**
+   — reporting only the global extreme (as the corrected item 8 note
+   above used to) hides this:
+     - TX per-channel minima (n=256 channels): median `-0.8525`, 5th
+       percentile `-1.1795`, 95th `-0.5018`, most extreme `-1.4384`.
+     - SBP per-channel minima (n=256 channels): median `-2.1224`, 5th
+       `-2.7766`, 95th `-1.6355`, most extreme `-3.5107` (this is the
+       value item 8's correction concerns).
+
+   **(c) The per-sentence lattice is CONFIRMED.** Because normalization
+   is per-sentence (item 7), each sentence has exactly one divisor for a
+   given channel, so — unlike a whole block, which mixes many sentences'
+   different divisors together and is why the earlier per-block lattice
+   test found nothing — within one sentence and one TX channel the
+   released values DO sit on an evenly-spaced lattice. Confirmed in
+   230/240 tested (sentence, channel) cases (95.8%; 30 trials × 8 TX
+   channels). Recovered per-sentence sigma: median `0.5608`, 5th
+   `0.2516`, 95th `0.8224`.
+
+   **(d) This makes raw spike counts recoverable exactly, with no
+   distributional assumption**, per (sentence, channel):
+   ```
+   sigma = 1 / (lattice spacing for that sentence and channel)
+   mu    = -(minimum observed value in that sentence/channel) * sigma
+   raw   = released * sigma + mu
+   ```
+   The `mu` step assumes the sentence's minimum value corresponds to a
+   genuine zero-count bin, not a one-off extreme — justified because
+   every TX channel's minimum value recurs many times when pooled across
+   sampled trials (median 13,207 recurrences; 256/256 channels recur
+   more than 100 times), i.e. minima are plateaus, not outliers. Implied
+   median firing rate via this exact route is **~24 Hz**, consistent
+   with genuine multiunit activity and comfortably above the ≥2 Hz
+   criterion Willett et al. 2023 used for "this electrode has spiking
+   activity" (item 3 above).
+
+   **(e) The cruder Poisson-approximation route (`mu = minimum^2`,
+   assuming `sigma = sqrt(mu)`) disagrees with the exact method by
+   roughly 1.5x** (median ~36 Hz vs. the exact method's ~24 Hz). It is
+   not wrong in the sense of being unusable — 83.2% of TX channels still
+   land in the physiologically plausible 20–100 Hz range under it — but
+   it is not the number to report or build on. **Use the exact
+   lattice-based recovery route in (d); keep the Poisson figure only as
+   a rough cross-check**, not a measurement.
 
 **Left to us:**
 
@@ -412,5 +515,5 @@ The full published pipeline goes: neural features → GRU + CTC → phoneme sequ
 - [x] Determine typical block sizes and whether block count per session varies systematically over time — done; see `docs/DESIGN.md` section 12, Task 4a.
 - [x] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound — resolved: adopted as the PRIMARY analysis (`docs/DESIGN.md` section 7, corpus stratification decision); 17/30 held-out sessions survive a 50-trial threshold (corrected count — see the next item), full day-offset range (+5 to +546d) and all four curve endpoints preserved; see `docs/DESIGN.md` section 12, Task 2 (round 2).
 - [x] Resolve the CSV-vs-manifest trial-count discrepancy — resolved: goes both directions (not uniformly CSV ≥ actual), roughly proportional to corpus/partition size (not concentrated), and at least partly caused by confirmed partition misattribution (a Switchboard block's trials split across labeled `val` and unlabeled `test` were being counted as if fully labeled) rather than only QC drops. HDF5/manifest is authoritative for counts; CSV is authoritative for corpus labels. See `docs/DESIGN.md` section 12, Task 3 (round 2).
-- [x] Resolve the normalization unit — **RESOLVED, 2026-09-02, by author correspondence, not by further empirical testing.** It is a rolling per-channel z-score over the previous up-to-10 sentences' speaking epochs (inclusive of the current sentence), causal, per Nicholas S. Card (corresponding author, Card et al. 2024). Not per-block, not per-session, not global — none of the three original hypotheses. This also explains why the lattice test (no shared divisor per block) and the ~0.06 per-block residual (overlapping per-sentence windows, not one shared statistic) both failed the way they did. See section 9 above and `docs/DESIGN.md` sections 7, 6, and 8.
+- [x] Resolve the normalization unit — **RESOLVED, 2026-09-03 (window width corrected from an initial "10" on 2026-09-02 to "20"), by author correspondence, not by further empirical testing.** It is a rolling per-channel z-score over the previous up-to-20 sentences' speaking epochs (inclusive of the current sentence), causal, per Nicholas S. Card (corresponding author, Card et al. 2024). Not per-block, not per-session, not global — none of the three original hypotheses. This also explains why the lattice test (no shared divisor per block) and the ~0.06 per-block residual (overlapping per-sentence windows, not one shared statistic) both failed the way they did. See section 9 above and `docs/DESIGN.md` sections 7, 6, and 8.
 - [ ] Decide warm-up-trial exclusion (N trials to exclude from evaluation at the start of each session, if any) — must be decided before looking at any PER value; see `docs/DESIGN.md` section 11.

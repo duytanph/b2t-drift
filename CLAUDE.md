@@ -18,6 +18,15 @@ Guidance for working in this repository.
   matters for this project; a random train/test split across sessions would
   invalidate the drift analysis.
 
+## Known pitfalls
+
+- `collate_trials` returns `input_lengths` BEFORE any model-side temporal
+  downsampling. Any model that strides, patches, or pools the time axis
+  MUST divide `input_lengths` accordingly before passing them to
+  `nn.CTCLoss`. Getting this wrong produces a model that trains and
+  converges while emitting garbage, with no error raised. This is the
+  most likely location for a silent bug in the pipeline.
+
 ## Design philosophy
 
 - No premature abstraction: no registries, no `BaseTrainer`, no plugin

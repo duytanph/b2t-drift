@@ -94,9 +94,10 @@ attribution causes in section 6.
 **Arm 1, "recompute per-session z-score statistics," is retired as an
 intervention.** It is not something we would do — the released data
 already does something strictly better: a continuous rolling per-channel
-z-score over the previous up-to-10 sentences, recomputed sentence by
+z-score over the previous up-to-20 sentences, recomputed sentence by
 sentence within every session (`docs/DATASET.md` section 9, confirmed by
-author correspondence 2026-09-02). Recomputing one statistic per session
+author correspondence 2026-09-03; an initial reply said 10, corrected to
+20 the next day). Recomputing one statistic per session
 would be a *coarser*, less current version of what's already there, and it
 isn't a participant-time cost at all — it happens automatically, for free,
 as a property of the released data. There is nothing left for this arm to
@@ -133,18 +134,59 @@ The remaining arms, renumbered:
 
 ---
 
-## 6. What a rising PER curve now means
+## 6. Three-stage adaptation, and what a rising PER curve now means
 
-Revised 2026-09-02, after the normalization mechanism was confirmed by
-author correspondence (`docs/DATASET.md` section 9). This changes what the
-ATTRIBUTION question (section 4) can and cannot conclude, and is the
-reasoning behind the arms in section 5.
+Revised 2026-09-03. Originally written 2026-09-02 around the rolling
+z-score alone; expanded once author correspondence and `docs/DATASET.md`
+section 9 established that the release pipeline actually applies **three
+independent adaptive corrections, at three different timescales**, before
+any data reaches our model. This changes what the ATTRIBUTION question
+(section 4) can and cannot conclude, and is the reasoning behind the arms
+in section 5.
 
-**Z-scoring is a per-channel affine transform, so it can only undo
-per-channel affine changes.** It removes absolute firing-rate shifts
-(offset) and variance shifts (gain), *per channel, continuously, every
-sentence*, because that is exactly what a rolling per-channel mean/std
-normalization is defined to do. It does **not** remove:
+### The three stages
+
+| # | Correction | Timescale | Removes |
+|---|---|---|---|
+| 1 | RMS spike-detection threshold (`docs/DATASET.md` section 9, item 3) | ~50 sentences (recomputed from the preceding BLOCK) | Slow drift in a channel's noise floor |
+| 2 | Rolling per-channel z-score (`docs/DATASET.md` section 9, item 7) | 20 sentences (rolling window) | Per-channel gain/offset (affine) changes |
+| 3 | Day-specific input layer (`docs/DESIGN.md` section 12, Task 4b) | Trained per session | Whatever a learned linear map on that session's data can capture — but starts at the identity, contributes nothing until trained |
+
+**Stage 1 — adaptive RMS threshold.** The −4.5×RMS detection threshold is
+re-estimated from the immediately preceding block's data, roughly every 50
+sentences throughout the recording. This removes SLOW CHANGES IN A
+CHANNEL'S NOISE FLOOR — if the ambient noise level drifts up or down over
+weeks, the threshold tracks it, so the *count* of crossings stays
+comparable. **It does NOT remove loss of spike amplitude relative to
+noise.** As an electrode becomes encapsulated (scar tissue forming around
+it), detectable spike amplitudes shrink while the noise floor itself holds
+roughly steady — SNR falls, spikes drop below the (noise-tracking)
+threshold, and the crossing rate genuinely, correctly declines. The
+threshold tracks noise, not signal, so it has no mechanism to compensate
+for this; a declining crossing rate from this cause is a real signal, not
+an artifact the pipeline is hiding.
+
+**CAVEAT — TX crossing rate is a DEGRADED measure of channel health under
+adaptive thresholding.** A channel can be actively dying while its
+crossing rate *appears* stable, if the noise floor happens to be moving in
+the same direction as the true signal loss (adaptive thresholding cannot
+distinguish "this channel is fine, the noise just moved" from "this
+channel is dying, but slowly enough that the threshold is still tracking
+its noise floor reasonably"). **The Week 2 channel-mortality analysis must
+therefore use recovered raw spike counts — reported in spikes per second
+(Hz), not normalized units, via the exact recovery route in
+`docs/DATASET.md` section 9 item 9 (`sigma = 1/spacing`,
+`mu = -min*sigma`, `raw = released*sigma + mu`, converted to Hz by
+dividing by the 20 ms bin width) — and the +10 clipping-saturation
+signature (`docs/DATASET.md` section 9, item 8), not crossing rate
+alone** — crossing
+rate is confounded by exactly the adaptation that's supposed to make it
+comparable across sessions.
+
+**Stage 2 — rolling per-channel z-score.** Removes per-channel AFFINE
+changes only: absolute firing-rate shifts (offset) and variance shifts
+(gain), continuously, every sentence, over a 20-sentence window. It does
+**not** remove:
 - which channels respond to which phonemes (a permutation- or
   mixing-level fact, not a scale),
 - inter-channel correlation structure (correlation is scale-invariant —
@@ -154,20 +196,30 @@ normalization is defined to do. It does **not** remove:
   space is not undone by 256 independent 1-d rescalings), or
 - temporal structure within a sentence.
 
-**The attribution candidates therefore reduce from four to three:**
+**Stage 3 — day-specific input layer.** LEARNED, and initializes to the
+identity transform with zero bias (`torch.eye` / zeros, confirmed from the
+official checkpoint's `rnn_model.py` — `docs/DESIGN.md` section 12, Task
+4b follow-up). It contributes nothing to Model B until we train it; when
+trained, it is a linear map with enough degrees of freedom to partially
+compensate for tuning change and subspace rotation (see Arm 2, section 5),
+but it is our OWN intervention, not something the release data has already
+applied — do not confuse it with stages 1–2, which happen upstream of us
+regardless of what we do.
+
+### The attribution candidates reduce from four to three
 
 - **CHANNEL DEATH** — an electrode stops producing usable signal. Note a
-  non-obvious interaction with the confirmed normalization: z-scoring may
-  **amplify** channel death rather than hide it. Dividing a channel whose
-  true variance has collapsed toward zero by its own (near-zero) estimated
-  std inflates whatever residual noise remains back up to unit variance —
-  the channel doesn't disappear from the normalized signal, it turns into
-  amplified noise. Whether this actually happens depends on epsilon/
-  clipping choices in the release pipeline that we have not inspected;
-  **this should be checked empirically** (e.g. does per-channel variance,
-  computed just before normalization if recoverable, or channel-level
-  behavior after normalization, show any channels behaving like amplified
-  noise) before relying on it as an explanation.
+  non-obvious interaction with stage 2: z-scoring may **amplify** channel
+  death rather than hide it. Dividing a channel whose true variance has
+  collapsed toward zero by its own (near-zero) estimated std inflates
+  whatever residual noise remains back up to unit variance — the channel
+  doesn't disappear from the normalized signal, it turns into amplified
+  noise, which the +10 clip then caps (`docs/DATASET.md` section 9, item
+  8). **This should be checked empirically** (e.g. does clip-saturation
+  rate per channel correlate with other channel-health indicators, and
+  does it change over session date) before relying on it as an
+  explanation — see the CAVEAT above for why crossing rate alone can't
+  settle this.
 - **TUNING CHANGE** — the mapping from phoneme to channel response shifts,
   e.g. because the electrode senses a different local neural population as
   tissue and electrode geometry change over months. Not fixable by any
@@ -180,24 +232,30 @@ normalization is defined to do. It does **not** remove:
   channels — this is the premise of Arm 1 (section 5), and also within
   reach of Arm 2.
 
-**Marginal drift (gain/offset) is removed from view by the rolling
-normalization and cannot be studied with this release.** It was originally
-a fourth candidate cause; it no longer is, because the released data has
-already had it continuously corrected out, every sentence, before we ever
-see it.
+**Marginal drift (gain/offset, and now also slow noise-floor drift) is
+removed from view by stages 1–2 and cannot be studied with this release.**
+Gain/offset was originally a fourth candidate cause; it no longer is,
+because the released data has already had it continuously corrected out,
+every sentence, before we ever see it. Noise-floor drift specifically is
+also corrected out by stage 1, at the coarser ~50-sentence timescale — see
+the stage-1 discussion above for the one thing it does NOT cover (SNR
+loss from shrinking spike amplitude).
 
 **Resulting strength of the measurement.** Any degradation our drift curve
-shows has already survived a normalization that re-adapts every ~10
-sentences — so it **cannot** be attributed to per-channel gain or offset
-change; whatever is left over is necessarily channel death, tuning change,
-or subspace rotation (or some mix). Additionally, because the
-normalization is causal (only past and current sentences, matching what a
-real-time system can actually do — `docs/DATASET.md` section 9), our
-measurement describes a **realistically configured decoder**, not one that
-is ignoring an obvious fix a deployed system wouldn't have access to
-either. The drift curve is a meaningful, non-trivial measurement precisely
-*because* the easy explanation has already been ruled out by the data
-itself, not by our own preprocessing choices.
+shows has already survived THREE independent adaptive corrections at
+three different timescales (~50 sentences, 20 sentences, and — once we
+train it — per session). It therefore **cannot** be attributed to
+scaling, gain, offset, or noise-floor drift; whatever is left over is
+necessarily SNR loss (from genuine spike-amplitude shrinkage, which
+adaptive thresholding cannot mask — see stage 1), tuning change, or
+subspace-geometry change. Additionally, because stages 1–2 are both
+causal (only past and current data, matching what a real-time system can
+actually do — `docs/DATASET.md` section 9), our measurement describes a
+**realistically configured decoder**, not one that is ignoring an obvious
+fix a deployed system wouldn't have access to either. The drift curve is
+a meaningful, non-trivial measurement precisely *because* the easy
+explanations have already been ruled out by the data itself, not by our
+own preprocessing choices.
 
 ---
 
@@ -330,34 +388,40 @@ baseline needed — see Task 4 findings in section 12.
   budget. `T15Dataset` must not hold everything in memory; it has to read
   lazily from HDF5 per `__getitem__`.
 - **Length-bucketed batching, implemented as `LengthBucketedSampler`
-  (`data/collate.py`).** `n_time_steps` spans 138–2179+ bins (the wider
-  range from later sessions — `docs/DESIGN.md` section 10 on sentence
-  length), roughly 7.4x within any one sample and more across the full
-  dataset. Random batching wastes most of each batch on padding — trials
-  are sorted by length, chunked into batches, and only the ORDER of
-  batches (not their contents) is shuffled per epoch, with a small
-  (`bucket_noise`) random jitter on the sort key so the same trials
-  aren't batched together identically every epoch. **Deliberate tradeoff,
-  recorded here as instructed by `collate.py`'s own docstring**: this
-  makes batches non-i.i.d. in sentence length — a given batch is drawn
-  from a narrow duration band, not a uniform sample of the dataset. This
-  is standard practice in speech recognition training and is accepted as
-  a worthwhile cost for the padding reduction, not treated as a bug.
-- **DataLoader worker count: use `num_workers=2` or `4`, never `0`, and
-  benchmark with enough items that startup cost doesn't dominate
-  (2026-09-03, `scratch/benchmark_dataloader.py`).** An earlier benchmark
-  measured only 200 items and concluded `num_workers=0` was faster —
-  wrong, because Windows `spawn` worker-startup overhead (~1-2s, paid
-  once) swamped the signal at that scale. Redone with 2,048 items,
-  reporting marginal ms/item after excluding the first 100 warmup items:
-  `num_workers=0` -- 379.6 ms/batch (batch_size=32); `num_workers=2` --
-  35.1 ms/batch; `num_workers=4` -- 27.2 ms/batch. Against the ~230
-  ms/batch bar implied by the fp16 GPU benchmark (section 9, Task 3:
-  ~230 ms/step at fp16) so training isn't data-bound: **`num_workers=0`
-  does NOT clear the bar (would bottleneck training); both `num_workers=2`
-  and `4` clear it comfortably.** Use `num_workers=2` or `4` with
-  `persistent_workers=True` and `pin_memory=True` for all real training
-  and evaluation runs.
+  (`data/collate.py`) — a deliberate choice, recorded here as instructed
+  by `collate.py`'s own docstring.** `n_time_steps` spans 138–2179+ bins
+  (the wider range from later sessions — section 10 on sentence length),
+  roughly 7.4x within any one sample and more across the full dataset.
+  Random batching wastes most of each batch on padding; sorting trials by
+  length before chunking into batches measurably helps: on a 32-trial
+  pool at batch_size 8, padding waste (padded elements / total elements)
+  falls from **35.5% (random) to 13.7% (bucketed)**
+  (`scratch/verify_collate.py`, 2026-09-03). Only the ORDER of batches
+  (not their contents) is shuffled per epoch, with a small (`bucket_noise`)
+  random jitter on the sort key so the same trials aren't batched together
+  identically every epoch. **The cost, stated explicitly**: this makes
+  batches non-i.i.d. in sentence length — a given batch is drawn from a
+  narrow duration band, not a uniform sample of the dataset. Standard
+  practice in speech recognition training; accepted as a worthwhile
+  tradeoff for the padding reduction, not treated as a bug.
+- **DataLoader config: `num_workers=2`, `persistent_workers=True`,
+  `pin_memory=True` — the decision, not just an option (2026-09-03,
+  `scratch/benchmark_dataloader.py`).** An earlier benchmark measured only
+  200 items and concluded `num_workers=0` was faster — wrong, because
+  Windows `spawn` worker-startup overhead (~1-2s, paid once) swamped the
+  signal at that scale. Redone with 2,048 items, batch_size=32, reporting
+  marginal ms/batch after excluding the first 100 warmup items:
+  `num_workers=0` -- 380 ms/batch; `num_workers=2` -- 35 ms/batch;
+  `num_workers=4` -- 27 ms/batch. Budget context: the GPU benchmark
+  measured the baseline model at ~461 ms/step fp32, roughly half that
+  (~230 ms/step) in fp16, so data loading must stay well under ~230
+  ms/batch or it becomes the training bottleneck. **`num_workers=0` does
+  NOT clear that bar and must never be used for real training or
+  evaluation runs.** `num_workers=4` is marginally faster in steady state
+  than `num_workers=2` (27 vs 35 ms/batch) but not meaningfully so relative
+  to the ~230 ms budget either clears comfortably; **`num_workers=2` is
+  the chosen default**, leaving more CPU headroom for anything else
+  running on the same machine during training.
 - **Normalization is already applied, and is NOT block/session/global —
   it's a rolling per-channel, per-sentence window. [RESOLVED 2026-09-02,
   by author correspondence — see `docs/DATASET.md` section 9.]** Earlier
@@ -367,9 +431,10 @@ baseline needed — see Task 4 findings in section 12.
   per-block, per-session, or global — never finding a clean answer,
   because none of the three was correct. Nicholas S. Card (corresponding
   author, Card et al. 2024 NEJM) confirmed by email: `input_features` are
-  z-scored per channel using a rolling window of up to the previous 10
-  sentences' speaking epochs, inclusive of the current sentence — causal,
-  matching what a real-time system can do. This also explains, precisely,
+  z-scored per channel using a rolling window of up to the previous 20
+  sentences' speaking epochs (corrected from an initial "10" the next
+  day), inclusive of the current sentence — causal, matching what a
+  real-time system can do. This also explains, precisely,
   why both empirical tests failed the way they did: the lattice test
   assumed one shared divisor per block (there isn't one — every sentence
   has its own), and the ~0.06 per-block statistical residual came from
@@ -433,7 +498,7 @@ without saying why.
   curve to elapsed time** — a correlation with trial count rather than
   (or in addition to) day-offset would indicate a normalization-exposure
   confound, not pure temporal drift.
-- **The first ~10 sentences of each session are normalized on a
+- **The first ~20 sentences of each session are normalized on a
   still-filling window** (as few as 1 prior sentence for the very first
   trial of a session), so their normalization statistics are noisier than
   later trials'. **Elevated PER on early trials in a session is expected
@@ -491,7 +556,7 @@ at any PER value**, per the validation-set rule in section 7.
   any model are examined. As of this writing the decision has not yet been
   made; this is a placeholder to be filled in when it is, not a decision by
   omission. Candidate considerations for whoever makes this call: the
-  rolling window reaches full width at sentence 10, so N=10 is a natural
+  rolling window reaches full width at sentence 20, so N=20 is a natural
   starting candidate, but the right choice should weigh how much of each
   held-out session's already-small trial budget (as few as 80 trials in
   the earliest held-out sessions) a fixed N would consume.
@@ -760,10 +825,12 @@ sessions, all train blocks (18 blocks), all 256 TX columns
   saved with the per-(session, block, column) test results for the record,
   including the 3 float32-artifact false positives, but it is not a usable
   parameter table.
-- **Explained in full, 2026-09-02:** this non-result was exactly correct.
-  Nicholas S. Card confirmed the real transform uses a *different divisor
-  per sentence* (a rolling up-to-10-sentence window), so integer counts
-  never land on one shared per-block or per-session lattice regardless of
+- **Explained in full, 2026-09-02 (window width corrected 2026-09-03, see
+  `docs/DATASET.md` section 9 item 7):** this non-result was exactly
+  correct. Nicholas S. Card confirmed the real transform uses a
+  *different divisor per sentence* (a rolling up-to-20-sentence window),
+  so integer counts never land on one shared per-block or per-session
+  lattice regardless of
   how clean the raw counts were — the lattice test's premise (one fixed
   affine transform per block) could not have succeeded no matter how
   precisely it was run. See section 8 above.
@@ -902,3 +969,10 @@ the date range).
     result as a rough, favorable cross-check, not as a validated
     measurement method — do not build anything in Week 2+ that depends
     on a *single* recovered mu/sigma per channel.
+  - **Update, 2026-09-03: the exact per-(sentence, channel) recovery is
+    now fully worked out** — `sigma = 1/spacing`, `mu = -min * sigma`,
+    `raw = released*sigma + mu` — and gives a median implied rate of
+    ~24 Hz, disagreeing with the Poisson approximation's ~36 Hz by
+    roughly 1.5x. **Use the exact route, not the Poisson figure, for any
+    Week 2 firing-rate analysis** — see `docs/DATASET.md` section 9,
+    item 9 for the full method and justification.

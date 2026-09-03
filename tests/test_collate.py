@@ -226,3 +226,74 @@ def test_sampler_bucket_noise_changes_composition_across_epochs() -> None:
     epoch1_batches = [tuple(sorted(b)) for b in sampler]
 
     assert epoch0_batches != epoch1_batches
+
+
+def test_iter_without_set_epoch_is_pure_and_repeatable() -> None:
+    """__iter__ must not mutate state -- two calls with no intervening
+    set_epoch() yield identical batches; set_epoch() is the only thing
+    that changes future iteration."""
+    lengths = list(range(100, 100 + 40))
+    trial_ids = make_trial_ids_with_lengths(lengths)
+    sampler = LengthBucketedSampler(
+        trial_ids, batch_size=4, shuffle=True, seed=0, bucket_noise=0.15,
+    )
+
+    first_call = list(sampler)
+    second_call = list(sampler)
+    assert first_call == second_call
+
+    sampler.set_epoch(1)
+    third_call = list(sampler)
+    assert third_call != first_call
+
+
+def test_drop_last_false_includes_short_final_batch() -> None:
+    lengths = list(range(10))  # 10 trials, batch_size 4 -> batches of 4,4,2
+    trial_ids = make_trial_ids_with_lengths(lengths)
+    sampler = LengthBucketedSampler(trial_ids, batch_size=4, shuffle=False, drop_last=False)
+
+    batches = list(sampler)
+    assert len(sampler) == 3
+    assert len(batches) == 3
+    assert [len(b) for b in batches] == [4, 4, 2]
+    assert sorted(i for b in batches for i in b) == list(range(10))
+
+
+def test_drop_last_true_drops_short_final_batch() -> None:
+    lengths = list(range(10))
+    trial_ids = make_trial_ids_with_lengths(lengths)
+    sampler = LengthBucketedSampler(trial_ids, batch_size=4, shuffle=False, drop_last=True)
+
+    batches = list(sampler)
+    assert len(sampler) == 2
+    assert len(batches) == 2
+    assert [len(b) for b in batches] == [4, 4]
+    # The 2 trials in the dropped short batch are legitimately absent.
+    assert len(sorted(i for b in batches for i in b)) == 8
+
+
+def test_drop_last_with_3969_trials_batch_size_32() -> None:
+    """The exact TRAIN block size (docs/DATASET.md section 13) and batch
+    size that makes the last batch of an un-dropped epoch a single trial."""
+    n_trials = 3969
+    batch_size = 32
+    lengths = [100 + (i % 50) for i in range(n_trials)]  # arbitrary lengths
+    trial_ids = make_trial_ids_with_lengths(lengths)
+
+    with_drop = LengthBucketedSampler(trial_ids, batch_size=batch_size, shuffle=False, drop_last=True)
+    without_drop = LengthBucketedSampler(trial_ids, batch_size=batch_size, shuffle=False, drop_last=False)
+
+    assert len(with_drop) == 124
+    assert len(without_drop) == 125
+
+    with_drop_batches = list(with_drop)
+    without_drop_batches = list(without_drop)
+    assert len(with_drop_batches) == 124
+    assert len(without_drop_batches) == 125
+    assert all(len(b) == batch_size for b in with_drop_batches)
+    assert [len(b) for b in without_drop_batches[:-1]] == [batch_size] * 124
+    assert len(without_drop_batches[-1]) == 1  # the leftover trial
+
+    # drop_last=False must still cover every trial exactly once.
+    seen = sorted(i for b in without_drop_batches for i in b)
+    assert seen == list(range(n_trials))
