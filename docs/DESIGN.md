@@ -341,22 +341,44 @@ session 16.
 
 ### Corpus stratification decision
 
-**Switchboard-only is the PRIMARY analysis; all-trials (every corpus
-pooled) is reported as a secondary curve.** Justification: the training
-block is ~87–88% Switchboard by trial count (section 12, Task 2 finding)
-while at least 8 of the 30 base-case held-out sessions contain **zero**
-Switchboard trials at all — an all-trials curve conflates task-distribution
-shift (evaluating on corpora the model never trained on) with neural
-drift, which is exactly the confound this project exists to avoid mistaking
-for its own subject. Switchboard-only removes the worst of that confound
-while preserving the full day-offset range and, critically, all six of the
-2025 sessions (see Task 2 findings in section 12).
+**Switchboard-only for BOTH training and evaluation is the PRIMARY
+analysis** (`scripts/01_build_splits.py`, `splits/temporal_s01_s*_switchboard.json`);
+**all-corpora is generated only as a named fallback**
+(`splits/temporal_s01_s15_allcorpora.json`, 1–15 cut only) in case
+Switchboard-only proves too small a training set to reach a usable
+decoder — it is never the default, and the two are not directly
+comparable to each other (different training-set sizes and, for eval,
+different task distributions).
+
+**Justification:** with train and eval BOTH restricted to the same
+corpus, the drift curve isolates elapsed time as the only varying
+factor. Pooling all corpora would conflate task-distribution shift
+(evaluating on corpora the model never trained on) with neural drift —
+the training block is ~87–88% Switchboard by trial count (section 12,
+Task 2 finding) while at least 8 of the 30 base-case held-out sessions
+contain **zero** Switchboard trials at all, so an all-corpora curve is
+not measuring the same thing session to session. Switchboard-only
+removes that confound while preserving the full day-offset range and,
+critically, all six of the 2025 sessions.
+
+**The cost, measured exactly from the generated manifests
+(2026-09-04):** the 1–15 cut has **3,501 Switchboard trials** (3,150
+train + 351 val) versus **3,969 all-corpora** (3,571 + 398) — Switchboard-
+only trains on **~11.8% less data** at that cut point. (Framed elsewhere
+as "about 13%"; the precise, manifest-verified figure is closer to 12%
+-- use this number, computed directly from `splits/temporal_s01_s15_switchboard.json`
+and `splits/temporal_s01_s15_allcorpora.json`, not the rounder estimate.)
+This is the tradeoff the all-corpora fallback exists to hedge against.
 
 **The ≥50-labeled-Switchboard-trial viability threshold was fixed in
 advance of seeing any PER values** (during the Task 2 feasibility check,
-section 12) — a session below it is excluded from the primary curve
-because PER on fewer than 50 sentences is too noisy to plot as a
-meaningful curve point, not because of how it happens to score.
+section 12; enforced per eval session by `build_temporal_split`'s
+`min_eval_trials` and recorded as `passes_threshold` in every manifest —
+`src/b2t_drift/data/splits.py`) — a session below it is excluded from
+the primary curve because PER on fewer than 50 sentences is too noisy to
+plot as a meaningful curve point, not because of how it happens to
+score. It is FLAGGED in the manifest, never silently dropped, so which
+sessions were excluded and why stays auditable.
 
 ### Why the official split cannot measure drift
 

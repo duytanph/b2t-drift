@@ -8,6 +8,8 @@
 dataset_name: t15
 raw_data_dir: data/raw/hdf5_data_final
 manifest_path: data/interim/session_manifest.csv
+corpus_csv_path: data/external/t15_copyTaskData_description.csv
+splits_dir: splits
 
 n_features: 512          # input_features channels per 20 ms bin
 bin_size_ms: 20
