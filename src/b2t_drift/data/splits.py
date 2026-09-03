@@ -44,12 +44,16 @@ import json
 import random
 import statistics
 import subprocess
-from collections.abc import Sequence
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from b2t_drift.data.hdf5_io import TrialId, discover_sessions, iter_trial_ids, parse_session_date
+from b2t_drift.data.hdf5_io import (
+    TrialId,
+    discover_sessions,
+    iter_trial_ids,
+    parse_session_date,
+)
 
 DEFAULT_VAL_FRACTION = 0.1
 DEFAULT_MIN_EVAL_TRIALS = 50
@@ -97,7 +101,7 @@ def _git_commit_hash() -> str | None:
             capture_output=True, text=True, check=True, timeout=5,
         )
         return result.stdout.strip()
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
 
 
@@ -258,7 +262,7 @@ def build_temporal_split(
     return {
         "name": name,
         "created_by": CREATED_BY,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "git_commit": _git_commit_hash(),
         "corpus_filter": corpus_filter,
         "cut_session_index": cut_session_index,
