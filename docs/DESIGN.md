@@ -329,9 +329,35 @@ baseline needed — see Task 4 findings in section 12.
 - **Lazy HDF5 loading.** The dataset is ~12 GB against a 16 GB system RAM
   budget. `T15Dataset` must not hold everything in memory; it has to read
   lazily from HDF5 per `__getitem__`.
-- **Length-bucketed batching.** `n_time_steps` spans 138–1025+ bins, a
-  7.4x range. Random batching wastes most of each batch on padding —
-  batch by similar length instead.
+- **Length-bucketed batching, implemented as `LengthBucketedSampler`
+  (`data/collate.py`).** `n_time_steps` spans 138–2179+ bins (the wider
+  range from later sessions — `docs/DESIGN.md` section 10 on sentence
+  length), roughly 7.4x within any one sample and more across the full
+  dataset. Random batching wastes most of each batch on padding — trials
+  are sorted by length, chunked into batches, and only the ORDER of
+  batches (not their contents) is shuffled per epoch, with a small
+  (`bucket_noise`) random jitter on the sort key so the same trials
+  aren't batched together identically every epoch. **Deliberate tradeoff,
+  recorded here as instructed by `collate.py`'s own docstring**: this
+  makes batches non-i.i.d. in sentence length — a given batch is drawn
+  from a narrow duration band, not a uniform sample of the dataset. This
+  is standard practice in speech recognition training and is accepted as
+  a worthwhile cost for the padding reduction, not treated as a bug.
+- **DataLoader worker count: use `num_workers=2` or `4`, never `0`, and
+  benchmark with enough items that startup cost doesn't dominate
+  (2026-09-03, `scratch/benchmark_dataloader.py`).** An earlier benchmark
+  measured only 200 items and concluded `num_workers=0` was faster —
+  wrong, because Windows `spawn` worker-startup overhead (~1-2s, paid
+  once) swamped the signal at that scale. Redone with 2,048 items,
+  reporting marginal ms/item after excluding the first 100 warmup items:
+  `num_workers=0` -- 379.6 ms/batch (batch_size=32); `num_workers=2` --
+  35.1 ms/batch; `num_workers=4` -- 27.2 ms/batch. Against the ~230
+  ms/batch bar implied by the fp16 GPU benchmark (section 9, Task 3:
+  ~230 ms/step at fp16) so training isn't data-bound: **`num_workers=0`
+  does NOT clear the bar (would bottleneck training); both `num_workers=2`
+  and `4` clear it comfortably.** Use `num_workers=2` or `4` with
+  `persistent_workers=True` and `pin_memory=True` for all real training
+  and evaluation runs.
 - **Normalization is already applied, and is NOT block/session/global —
   it's a rolling per-channel, per-sentence window. [RESOLVED 2026-09-02,
   by author correspondence — see `docs/DATASET.md` section 9.]** Earlier
@@ -815,3 +841,64 @@ itself reports (`scratch/investigate_csv_manifest_discrepancy.py`).
   prior round did, even with a session-level cap) understated the risk of
   partition misattribution and produced at least two wrong PASS/FAIL
   calls, corrected above.
+
+### Task 1 (round 3) — per-channel floor analysis: raw firing rates ARE recoverable per sentence, but not via the naive pooled-minimum method (2026-09-03)
+
+A prior conversational claim inferred a raw firing rate from the global
+feature minimum (-3.5107, from the feature-clipping check above) without
+checking three things: which column produced it, whether it's a repeated
+(genuine zero-count) value or a one-off, and whether a single per-channel
+minimum even means anything under rolling normalization (each sentence has
+its own window, so there's no single fixed per-channel scale to invert in
+the first place). That claim was never committed to these docs, but is
+worth recording as a corrected result now that it's been properly tested
+(`scratch/investigate_channel_floor.py`, 501 trials, 3 sessions spanning
+the date range).
+
+- **(b) The -3.5107 global minimum is an SBP column (278), not TX.**
+  Applying a Poisson spike-count inversion to it would have been a
+  category error regardless of anything else — SBP is continuous power,
+  not a count.
+- **(a) TX and SBP per-channel minima are very different distributions.**
+  TX per-channel min: median -0.85, [5th, 95th] = [-1.18, -0.50], never
+  below -1.44. SBP per-channel min: median -2.12, [5th, 95th] =
+  [-2.78, -1.64], down to -3.51. Reporting only the global extreme
+  (as the original claim did) silently picked the SBP tail.
+- **(e) The zero-count assumption holds up well, empirically.** For every
+  one of the 256 TX channels, the minimum value (within 0.05) recurs more
+  than 100 times (median 13,207 occurrences) — the minima are plateaus,
+  not one-off outliers, consistent with genuine zero-count bins rather
+  than sampling noise.
+- **(c)/(d) The naive method, corrected to use only real TX-channel minima,
+  gives surprisingly plausible numbers in aggregate** despite the
+  conceptual problem below: implied firing rate median 36.3 Hz, and
+  83.2% of the 256 TX channels land in the physiologically plausible
+  20-100 Hz range (16.0% below, 0.8% above). This is a much better
+  outcome than the flawed -3.51-based claim would have suggested, but see
+  the next point for why it still shouldn't be trusted as a precise
+  per-channel measurement.
+- **(f) The real fix is testing the lattice at the correct granularity:
+  per SENTENCE, not per block.** Under rolling normalization, all bins of
+  a single trial share exactly one (mu, sigma) — unlike a block, which
+  mixes many different sentences' windows together (why the earlier
+  per-block lattice test in section 9/12 found nothing). Tested on 30
+  trials x 8 TX channels = 240 (trial, channel) pairs: **the lattice is
+  confirmed in 230/240 (95.8%) of cases**, each yielding an exact,
+  assumption-free recovered sigma for that specific sentence and channel
+  (median 0.56, range 0.23-0.88 — sigma genuinely varies sentence to
+  sentence, as expected under a rolling window).
+- **Conclusion, stated with the appropriate confidence split:**
+  - **Per-(sentence, channel) sigma is recoverable EXACTLY, with high
+    confidence**, via the per-sentence lattice test — this is a hard
+    arithmetic result, not an inference, and directly settles the
+    question. There is no single "the channel's sigma," only one value
+    per sentence, because that is what rolling normalization actually
+    computes.
+  - **The pooled-minimum-plus-Poisson method used for parts (c)/(d) is
+    conceptually unsound** (it silently averages over many different
+    sentence-specific windows as if there were one fixed per-channel
+    scale) but happened to produce physiologically plausible numbers
+    once restricted to genuine TX channels. Treat its 83.2%-in-range
+    result as a rough, favorable cross-check, not as a validated
+    measurement method — do not build anything in Week 2+ that depends
+    on a *single* recovered mu/sigma per channel.
