@@ -423,6 +423,31 @@ without saying why.
   underlying motor attempt has changed." Neither this dataset nor this
   project's design can resolve that ambiguity; it should be stated
   alongside any drift-curve result, not resolved away.
+- **Sentence length correlates with session date, and the Switchboard-only
+  restriction reduces but does not eliminate this confound (2026-09-03,
+  `scratch/investigate_sentence_length.py`).** Longer sentences have more
+  phonemes and different error statistics, so a length trend can
+  masquerade as drift. At the session level (n=45), median seq_len vs.
+  date: Pearson r=0.27 (p=0.074, not significant) but Spearman ρ=0.47
+  (p=0.0012, significant) — the discrepancy is driven by several sessions
+  dominated by the much-shorter 50-Word corpus (median seq_len ~17–19)
+  scattered non-monotonically through the timeline (`t15.2023.08.11`,
+  `t15.2024.03.03`, `t15.2024.04.25`, `t15.2024.04.28`), which hurts the
+  linear fit more than the rank-based one. The TRAIN block's median
+  seq_len (26.0) is somewhat shorter than the 30 held-out sessions'
+  (28.25). **Composition alone does not fully explain the trend**: at the
+  trial level, restricting to Switchboard only (n=6,491) still shows a
+  significant, if weak, upward trend (Pearson r=0.137, p=1.3e-28) — smaller
+  than but not eliminated by conditioning on a single corpus. Figure:
+  `figures/sentence_length_over_time.png` (visually, the Switchboard-only
+  series is far smoother than the all-corpora series, confirming corpus
+  composition drives most of the large swings, but the Switchboard-only
+  series still drifts mildly upward end to end). **Verdict: a mild-to-
+  moderate confound, not a serious one, and not fully handled by
+  Switchboard-only alone. Per-session median seq_len must be reported
+  alongside PER on every drift curve**, so a reader can visually check
+  whether the two covary before attributing a PER change to elapsed time
+  rather than sentence length.
 
 ---
 

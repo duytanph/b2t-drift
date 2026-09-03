@@ -232,6 +232,42 @@ Applied by the authors before release:
    affects the split design, the "what a rising PER curve means"
    interpretation, and the warm-up-trials decision.
 
+8. **Clipping at +10 std, empirically one-sided in practice.
+   [verified — empirical, 2026-09-03].** The hdf5_io verification output
+   showed `features.max() == 10.000000` exactly for
+   `t15.2023.08.11/trial_0149`; confirmed across ~500 trials sampled from
+   3 sessions spanning the recording period
+   (`scratch/investigate_feature_clipping.py`): global max is exactly
+   `10.0` (22,539 of ~249M inspected values sit exactly at the clip,
+   0.009%), global min is `-3.51` — **no value in the sample equals
+   exactly `-10.0`.** This was not mentioned in the author correspondence
+   about normalization (section 7 above); it is an independent,
+   empirically-confirmed detail of the release pipeline, not something
+   Card's email described.
+
+   The clip is **asymmetric in observed behavior**, not necessarily in the
+   pipeline's programmed bounds: TX (spike counts) and SBP (power) are
+   both non-negative *before* z-scoring, so even a symmetric ±10
+   post-z-score clip would rarely be reached on the low side (a channel
+   sitting at its natural floor of "0 crossings" or "0 power" simply
+   can't deviate as many standard deviations below its own rolling mean
+   as a channel having an unusually active burst can deviate above it).
+   We have not confirmed whether the underlying clip bounds are
+   `[-10, 10]` with the low side just never observed, or something
+   actually one-sided like `[-inf, 10]` — both are consistent with what
+   we measured.
+
+   **Flagged for Week 2, not yet established:** a dead or dying channel,
+   divided by its own near-zero standard deviation during rolling
+   normalization, would have its residual noise inflated toward unit
+   variance (`docs/DESIGN.md` section 6) — and the +10 clip caps how far
+   that inflation can go. **A channel that saturates at the clip value
+   unusually often is therefore a *candidate* signature of channel
+   death.** This is a hypothesis to test empirically in Week 2 (e.g. does
+   clip-saturation rate per channel correlate with other channel-health
+   indicators, and does it change over session date), not an established
+   finding — nothing in this section confirms it actually happens.
+
 **Left to us:**
 
 - Any temporal smoothing or downsampling

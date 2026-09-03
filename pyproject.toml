@@ -21,7 +21,7 @@ build-backend = "hatchling.build"
 packages = ["src/b2t_drift"]
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "pytest-timeout", "ruff"]
 
 # --- PyTorch CUDA index configuration -----------------------------------
 # Target hardware: RTX 2080 SUPER (Turing, compute capability 7.5), CUDA 12.x.
