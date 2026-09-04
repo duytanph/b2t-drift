@@ -112,7 +112,9 @@ def gate_run() -> dict:
     losses = []
     for _ in range(N_STEPS):
         optimizer.zero_grad()
-        log_probs = model(batch["features"], batch["session_indices"])
+        log_probs = model(
+            batch["features"], batch["session_indices"], input_lengths=batch["input_lengths"],
+        )
         loss = ctc_loss_fn(
             log_probs,
             batch["targets"],
@@ -166,7 +168,9 @@ def test_greedy_decode_recovers_at_least_one_trial(gate_run) -> None:
 
     model.eval()
     with torch.no_grad():
-        log_probs = model(batch["features"], batch["session_indices"])
+        log_probs = model(
+            batch["features"], batch["session_indices"], input_lengths=batch["input_lengths"],
+        )
     model.train()
 
     decoded = greedy_ctc_decode(
@@ -220,7 +224,14 @@ def test_swapped_lengths_control_does_not_reach_threshold() -> None:
     try:
         for _ in range(N_STEPS):
             optimizer.zero_grad()
-            log_probs = model(batch["features"], batch["session_indices"])
+            # forward()'s own input_lengths argument (masking/packing)
+            # always gets the REAL per-trial lengths -- only the lengths
+            # handed to nn.CTCLoss are deliberately swapped/corrupted
+            # below, per this test's purpose.
+            log_probs = model(
+                batch["features"], batch["session_indices"],
+                input_lengths=batch["input_lengths"],
+            )
             loss = ctc_loss_fn(
                 log_probs,
                 batch["targets"],
@@ -277,7 +288,8 @@ def test_forward_returns_time_first_with_correct_class_dim() -> None:
     model = GRUCTC(n_sessions=1, n_layers=1, hidden_size=32, use_day_layers=False)
     features = torch.randn(3, 20, 512)
     session_indices = torch.zeros(3, dtype=torch.int64)
-    log_probs = model(features, session_indices)
+    input_lengths = torch.full((3,), 20, dtype=torch.int64)
+    log_probs = model(features, session_indices, input_lengths=input_lengths)
     assert log_probs.shape == (20, 3, N_CLASSES)
 
 
@@ -288,7 +300,8 @@ def test_output_rows_sum_to_one_after_exp() -> None:
     model = GRUCTC(n_sessions=1, n_layers=1, hidden_size=32, use_day_layers=False)
     features = torch.randn(2, 15, 512)
     session_indices = torch.zeros(2, dtype=torch.int64)
-    log_probs = model(features, session_indices)
+    input_lengths = torch.full((2,), 15, dtype=torch.int64)
+    log_probs = model(features, session_indices, input_lengths=input_lengths)
     probs_sum = log_probs.exp().sum(dim=-1)
     assert torch.allclose(probs_sum, torch.ones_like(probs_sum), atol=1e-4)
 

@@ -13,6 +13,17 @@ dependencies = [
     "pandas",
 ]
 
+# Experiment trackers, ALL OPTIONAL -- see `src/b2t_drift/training/logging.py`'s
+# module docstring for why three, and its RunLogger implementations for how
+# each import is guarded so training works with any or all of these absent.
+# Install what you want with e.g. `uv sync --extra wandb`, or `--extra
+# tracking` for all three; the base install has none of them.
+[project.optional-dependencies]
+wandb = ["wandb"]
+tensorboard = ["tensorboard"]
+mlflow = ["mlflow"]
+tracking = ["wandb", "tensorboard", "mlflow"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

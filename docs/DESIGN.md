@@ -1244,3 +1244,49 @@ residual updates to a newly-frozen slice if that slice had nonzero
 optimizer state before freezing — for an exact freeze, call
 `freeze_all_except` before the fine-tuning optimizer has taken any
 steps, or construct a fresh optimizer for that phase.
+
+### FIXED (2026-09-04): PER is now independent of batch composition
+
+**Bug.** `DayLayers` runs on every timestep of a batch, including the
+zero-padded region `collate_trials` adds past each trial's real length.
+Before this fix, `GRUCTC.forward` did not mask that padding before
+`_smooth`'s depthwise Gaussian convolution ran. Once `DayLayers`' bias has
+moved off its zero initialization (i.e. after any training at all), a
+padded timestep evaluates to `0 @ W + bias = bias` — a NONZERO constant,
+not the zero the collate padding started as — and `_smooth` then mixes
+that leaked constant into the last ~`radius` (6 at the default
+`smoothing_sigma_bins=2.0`) real timesteps of any trial shorter than its
+batch's `max_time`. Since how much padding a trial gets depends on which
+OTHER trials happen to share its batch, **the same trial could decode to
+a different phoneme sequence depending on batch composition alone** —
+silently, since nothing raised.
+
+**Measured, before the fix:** 0.0755 max absolute `log_probs` difference,
+one trial decoded alone versus the same trial padded inside a larger
+batch, for a `DayLayers` with a nonzero (post-training-like) bias — large
+enough to flip a marginal argmax (i.e. large enough to change which
+phoneme gets decoded, not just perturb a probability by a harmless
+amount). A freshly constructed (identity-init) model showed ~0 difference
+in the same test, which is what first pinned the mechanism down to
+`DayLayers`' bias specifically, not the smoothing convolution itself (see
+`src/b2t_drift/models/gru_ctc.py`'s `_smooth` docstring for the full
+derivation).
+
+**The fix.** `GRUCTC.forward` now zeros every timestep at or past each
+item's `input_lengths[i]` immediately after `DayLayers` and before
+`_smooth` — `input_lengths` is now a MANDATORY `forward` argument
+(`ValueError` if omitted, not a silent skip: silent batch-dependence is
+worse than an explicit failure, and every real call site
+(`training/loop.py`) has `collate_trials`'s `"input_lengths"` available).
+With padding zeroed before `DayLayers`' output ever reaches `_smooth`,
+collate's explicit zero-padding and `F.conv1d`'s own implicit zero
+edge-padding are genuinely identical inputs to the convolution again,
+regardless of what `DayLayers` has learned.
+
+**Measured, after the fix:** both cases now measure at floating-point
+noise level — `4.77e-7` (fresh) and `9.54e-7` (trained) — comfortably
+below the `1e-5` threshold
+(`tests/test_gru_ctc.py::test_smoothing_batch_composition_sensitivity_below_threshold_after_fix`).
+**PER is now provably independent of batch composition**: a trial's
+decoded sequence, and therefore its contribution to PER, no longer
+depends on which other trials happened to share its evaluation batch.

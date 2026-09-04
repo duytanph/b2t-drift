@@ -1,0 +1,42 @@
+# Baseline training experiment: GRUCTC at its documented default
+# hyperparameters (docs/DESIGN.md section 13, "Model hyperparameters"),
+# trained on one of the Switchboard cut-point sweep's split manifests.
+#
+# The split manifest itself is NOT referenced here -- it's passed
+# separately via `--split` at the command line (scripts/02_train.py), so
+# this ONE experiment config is reused across all four cut points
+# (temporal_s01_s05/s10/s15/s20_switchboard) plus the all-corpora
+# fallback, rather than needing a near-duplicate config per split.
+
+experiment_name: switchboard_baseline
+data_config: configs/data/t15.yaml
+
+model:
+  hidden_size: 512          # docs/DESIGN.md section 13: [judgment call -- sweep this]
+  n_layers: 3                # docs/DESIGN.md section 13: [judgment call -- revisit if the baseline underfits]
+  dropout: 0.4                # docs/DESIGN.md section 13: [convention]
+  bidirectional: false        # docs/DESIGN.md section 13: [principled]
+  use_day_layers: true        # docs/DESIGN.md section 13: [principled]
+  input_dropout: 0.0          # docs/DESIGN.md section 13: [judgment call]
+  smoothing_sigma_bins: 2.0   # docs/DESIGN.md section 13: [principled]
+
+training:
+  # Every value below is a reasonable starting point chosen by ordinary
+  # ML-engineering judgment, NOT swept or tuned against this project's
+  # data -- unlike the model hyperparameters above, none of these carry
+  # a docs/DESIGN.md citation, because none has been decided as a project
+  # commitment yet. Revisit once a real training run's curves say
+  # otherwise.
+  seed: 0
+  max_epochs: 50
+  patience: 5
+  batch_size: 32
+  learning_rate: 0.001
+  grad_clip: 1.0               # matches training/loop.py's train_one_epoch default
+  amp: true                    # only actually used when a CUDA device is available -- see scripts/02_train.py
+  num_workers: 0                # Windows spawn-multiprocessing overhead not worth it at this data size; see data/hdf5_io.py
+
+logging:
+  wandb_project: b2t-drift
+  wandb_group: cutpoint_sweep   # training/logging.py: groups the sweep's runs together in the wandb UI
+  mlflow_experiment: b2t-drift

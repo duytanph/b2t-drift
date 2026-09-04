@@ -11,20 +11,46 @@ ARCHITECTURE, in forward order:
      simulating electrode failure. Off by default -- see `__init__`.
   2. (optional) `DayLayers`: per-session affine transform. See
      `models/day_layers.py`.
-  3. (optional) Gaussian temporal smoothing: fixed, non-learned depthwise
-     `conv1d` over the time axis. See `_smooth` -- including a documented
-     batch-composition-dependence limitation.
-  4. `nn.GRU`: the shared recurrent encoder. Uses PyTorch's built-in,
+  3. PADDING MASK: every timestep at or past each item's `input_lengths[i]`
+     is zeroed. MANDATORY, not optional -- see "PADDING MUST BE MASKED
+     BEFORE SMOOTHING" below for why this step exists and must run here,
+     between `DayLayers` and smoothing, not anywhere else.
+  4. Gaussian temporal smoothing: fixed, non-learned depthwise `conv1d`
+     over the time axis. See `_smooth`.
+  5. `nn.GRU`: the shared recurrent encoder. Uses PyTorch's built-in,
      cuDNN-backed implementation directly -- NOT a hand-rolled per-timestep
      loop, which would be 10-50x slower on GPU because it can't use
      cuDNN's fused RNN kernels. Do not "unroll" this for debuggability;
-     use `torch.autograd` / a debugger on the fused op instead. Optionally
-     run through `pack_padded_sequence`/`pad_packed_sequence` when
-     `forward`'s `input_lengths` argument is given -- see `forward`'s
-     docstring for when this is required (bidirectional) versus optional
-     (unidirectional).
-  5. A linear projection to `n_classes` logits, then `log_softmax` over the
+     use `torch.autograd` / a debugger on the fused op instead. Always run
+     through `pack_padded_sequence`/`pad_packed_sequence` (`forward`'s
+     `input_lengths` is mandatory) so padded timesteps never enter the
+     recurrence.
+  6. A linear projection to `n_classes` logits, then `log_softmax` over the
      class dimension.
+
+PADDING MUST BE MASKED BEFORE SMOOTHING (fixes a verified bug -- numbers
+below). `DayLayers` runs on EVERY timestep, including collate-padded ones,
+and once its bias has moved off its zero initialization (i.e. after any
+training), applying it to a padded (zero) timestep produces `0 @ W + bias
+= bias` -- a NONZERO constant, not the zero the padding started as.
+`_smooth`'s depthwise conv then mixes that leaked constant into the last
+few real timesteps near each sequence's boundary. Because how much padding
+a given trial gets depends on which OTHER trials share its batch,
+THE SAME TRIAL could decode differently depending on batch composition --
+silently, since nothing here raised. Measured before this fix: 0.0755 max
+absolute log-probs difference for a trained (nonzero-bias) `DayLayers`,
+comparing one trial decoded alone versus padded inside a larger batch --
+large enough to flip a marginal argmax, i.e. large enough to actually
+change the decoded phoneme sequence, not just perturb a log-probability by
+a harmless amount. THE FIX: zero every padded timestep immediately after
+`DayLayers`, before `_smooth` ever sees it -- collate's zero-padding and
+`_smooth`'s own implicit zero edge-padding are then genuinely identical
+inputs to the convolution again (as they always were for an untrained
+`DayLayers`; see `_smooth`'s docstring), regardless of what `DayLayers`
+has learned. Measured after this fix: < 1e-5 (see
+`tests/test_gru_ctc.py::test_smoothing_batch_composition_sensitivity_reports_magnitude`
+for the exact reproduced value). Recorded with both numbers in
+`docs/DESIGN.md`'s "Model hyperparameters" section.
 
 THE CTC LENGTH CONTRACT (see also `data/collate.py`'s module docstring,
 which this model's caller must also have read). This version applies NO
@@ -64,23 +90,20 @@ wrong) loss without `nn.CTCLoss` raising anything, since it takes
 log-probabilities on faith and never itself checks that they came from
 exactly one `log_softmax`.
 
-WHY PADDING MASKING MATTERS MORE FOR BIDIRECTIONAL THAN UNIDIRECTIONAL.
-Padding a batch pads only past the end of each sequence's real data
-(`data/collate.py`), never before its start. A UNIDIRECTIONAL (causal)
-GRU's hidden state at real timestep `t` depends only on inputs at times
-`<= t` -- it never sees the padded region at all while producing any
-output CTC will actually use (`input_lengths`, passed to `nn.CTCLoss`,
-tells CTC to ignore outputs past each item's real length). Padding is
-therefore harmless for the default `bidirectional=False` configuration,
-even without `forward`'s optional `input_lengths` packing argument --
-packing there is a pure performance optimization (skipping computation
-on padding), not a correctness requirement. A BIDIRECTIONAL GRU is
-different: its backward-direction pass starts at `max_time` (inside the
-padded region) and runs backward THROUGH the padding into every real
-timestep, so every output in the sequence is contaminated by whatever
-happens to be sitting in the pad region -- silently, since nothing here
-raises. This is why `bidirectional=True` is refused outright in
-`__init__` rather than left as a footgun (see `__init__`'s docstring).
+WHY `bidirectional=True` IS STILL REFUSED, EVEN THOUGH `input_lengths` IS
+NOW MANDATORY. The padding mask above plus the now-mandatory
+`pack_padded_sequence`/`pad_packed_sequence` around the GRU together close
+the CORRECTNESS gap that originally motivated refusing
+`bidirectional=True` in `__init__` (a bidirectional GRU's
+backward-direction pass used to be able to run through un-masked padding
+into every real timestep; packed sequences prevent that regardless of
+direction, since cuDNN's packed kernels already know each item's true
+length). The refusal remains in place anyway, because it was always ALSO
+a `[principled]` scope decision independent of that correctness gap: this
+project measures a realistically-configured, causal decoder (see
+`bidirectional`'s `__init__` docstring entry) -- re-enabling bidirectional
+support is a smaller lift now than before, but is a deliberate future
+change, not implied by this fix.
 
 DEVIATIONS FROM THE PUBLISHED BASELINE, gathered in one place:
   - Plain 512-dim input at 20 ms bins, no 14-bin/stride-4 concatenation
@@ -218,17 +241,17 @@ class GRUCTC(nn.Module):
                 default. Bidirectional would improve offline PER and is
                 a legitimate ablation, but must not be the default.
                 **`True` is currently REFUSED (raises `ValueError` right
-                here in `__init__`)**: a bidirectional GRU's
-                backward-direction pass runs through the padded region
-                into every real timestep, contaminating the whole
-                sequence, unless `forward`'s `input_lengths` argument is
-                given on EVERY call so the GRU can pack around padding --
-                `forward` cannot itself guarantee that (it's an optional
-                argument), so this configuration is refused at
-                construction time rather than left to silently corrupt
-                outputs at whichever call site forgets to pass lengths.
-                Revisit once there is a way to make `input_lengths`
-                mandatory specifically when `bidirectional=True`.
+                here in `__init__`)**. Originally refused because a
+                bidirectional GRU's backward-direction pass could run
+                through un-masked padding into every real timestep; now
+                that `forward`'s `input_lengths` is MANDATORY (padding is
+                always masked and the GRU is always packed -- see the
+                module docstring's "PADDING MUST BE MASKED BEFORE
+                SMOOTHING"), that correctness gap is closed. The refusal
+                stays anyway as a deliberate scope decision: this project
+                measures a realistically-configured, causal decoder, so
+                bidirectional remains a future ablation to enable
+                explicitly, not a default to fall into.
                 `[principled]`
             use_day_layers: True. Whether to apply `DayLayers` at all.
                 Not one of the four explicitly-justified hyperparameters
@@ -268,16 +291,16 @@ class GRUCTC(nn.Module):
         if bidirectional:
             raise ValueError(
                 "GRUCTC.__init__: bidirectional=True is not yet "
-                "supported. A bidirectional GRU's backward-direction "
-                "pass starts inside the padded region and runs through "
-                "it into every real timestep, contaminating the whole "
-                "sequence, unless input_lengths is passed to EVERY "
-                "forward() call so the GRU can pack/unpack around "
-                "padding -- forward() cannot guarantee that on its own "
-                "(input_lengths is an optional argument there), so this "
-                "configuration is refused here rather than left to "
-                "silently corrupt outputs on whichever call site forgets "
-                "to pass lengths."
+                "supported. forward()'s padding mask and mandatory "
+                "pack_padded_sequence/pad_packed_sequence now prevent a "
+                "bidirectional GRU's backward-direction pass from "
+                "reading padding regardless of direction, so the "
+                "original correctness concern is closed -- this remains "
+                "refused as a deliberate scope decision (this project "
+                "measures a realistically-configured, causal decoder; "
+                "see bidirectional's docstring entry), not a technical "
+                "limitation, and is a smaller lift to re-enable than it "
+                "used to be."
             )
 
         self.n_sessions = n_sessions
@@ -364,50 +387,33 @@ class GRUCTC(nn.Module):
         matches the published pipeline's fixed preprocessing step, which
         is a property of the FEATURES, not of the training regime.
 
-        KNOWN LIMITATION: OUTPUT CAN DEPEND ON BATCH COMPOSITION, ONCE
-        `DayLayers` HAS BEEN TRAINED. With the default
-        `smoothing_sigma_bins=2.0`, the kernel radius is `ceil(3*2) = 6`
-        bins, so this depthwise conv1d mixes the last ~6 REAL timesteps
-        of a shorter-than-`max_time` sequence with whatever sits in the
-        padded region right after it (`'same'` padding convolves right up
-        to the sequence boundary -- see `data/collate.py`).
-
-        THE PRECISE MECHANISM (verified directly, not assumed -- an
-        earlier version of this docstring stated the effect more
-        vaguely and turns out to have been importantly imprecise about
-        WHY it happens): `F.conv1d`'s own `padding=radius` argument
-        zero-fills the EDGE of whatever tensor it's given, so a trial
+        BATCH-COMPOSITION-DEPENDENCE: FIXED IN `forward`, NOT HERE.
+        Callers reaching this method should already have zeroed every
+        padded timestep -- `forward` does so immediately after
+        `DayLayers` and before calling `_smooth` (see the module
+        docstring's "PADDING MUST BE MASKED BEFORE SMOOTHING"). With
+        that precondition, this method's own conv1d boundary behavior is
+        provably batch-invariant: `F.conv1d`'s `padding=radius` argument
+        zero-fills the edge of whatever tensor it's given, so a trial
         processed ALONE (tensor length == that trial's own length) and
         the SAME trial's real-data region processed PADDED inside a
-        larger batch (`collate_trials`'s explicit zero-padding filling
-        the rest of the tensor) present IDENTICAL values (zero, either
-        way) to the convolution at the boundary -- **for a freshly
-        constructed model, the two cases are numerically indistinguishable,
-        confirmed to 1e-7 empirically.** The batch-dependence only
-        appears once `DayLayers` (which runs BEFORE this method, on
-        every timestep including the collate-padded ones -- `forward`
-        does not mask timesteps before smoothing, only before the GRU
-        when `input_lengths` is given) has been trained away from its
-        identity initialization: a nonzero learned BIAS turns the
-        collate-padding's zeros into `0 @ W + bias = bias` -- a nonzero
-        constant -- for every batched timestep past a trial's own length,
-        which is NOT what `F.conv1d`'s own implicit edge-padding would
-        have produced had that trial been processed alone. THAT
-        discrepancy (bias-contaminated padding vs. true zero-padding) is
-        the real, batch-composition-dependent effect, and it grows with
-        how far `DayLayers` has moved from identity, not with sigma or
-        radius directly. Quantified (both the near-zero untrained case
-        and the substantial trained-bias case) in
-        `tests/test_gru_ctc.py::test_smoothing_batch_composition_sensitivity_reports_magnitude`.
-        This is NOT fixed here (the smoothing is intentionally left
-        as-is, matching the published pipeline's fixed preprocessing
-        step); it is a documented, accepted limitation.
-
-        **If exact reproducibility of a specific trial's output matters**
-        (e.g. per-session evaluation where you want a trial's score to
-        not depend on incidental batch membership), use a FIXED batch
-        composition across runs, or `batch_size=1`, rather than relying
-        on this method to be batch-invariant -- it is not.
+        larger batch present IDENTICAL values (zero, either way) to the
+        convolution at the boundary, regardless of what `DayLayers` has
+        learned -- confirmed empirically, < 1e-5 max abs difference for a
+        TRAINED (nonzero-bias) `DayLayers`, down from 0.0755 before
+        `forward` masked the padding (see
+        `tests/test_gru_ctc.py::test_smoothing_batch_composition_sensitivity_reports_magnitude`
+        and `docs/DESIGN.md`'s "Model hyperparameters" section for both
+        numbers). PRIOR TO THAT FIX, this method silently mixed a
+        trained `DayLayers`' leaked bias into the last few real
+        timesteps whenever a trial was batched with a longer one -- this
+        docstring used to document that as an accepted limitation of
+        `_smooth` itself; it is now understood (and fixed) as a bug in
+        `forward`'s masking order, not an inherent property of
+        smoothing. `_smooth` NEVER masks anything itself -- it trusts
+        its caller to have already zeroed padding, which is why calling
+        this method directly (bypassing `forward`) on unmasked input
+        would reintroduce the old bug.
 
         Args:
             x: `(batch, time, n_features)` float32.
@@ -477,34 +483,36 @@ class GRUCTC(nn.Module):
                 `"session_indices"`. Read even when `use_day_layers=False`
                 (accepted for a uniform call signature) but unused in
                 that case.
-            input_lengths: `(batch,)` int64, optional. Each item's true
-                (unpadded) timestep count -- the SAME `collate_trials`
+            input_lengths: `(batch,)` int64. Each item's true (unpadded)
+                timestep count -- the SAME `collate_trials`
                 `"input_lengths"` tensor you separately route through
                 `ctc_input_lengths` before `nn.CTCLoss` (see this
                 argument's relationship to that one in the module
-                docstring; they are NOT the same adjustment). When given,
-                the GRU is run through `nn.utils.rnn.pack_padded_sequence`
-                / `pad_packed_sequence` (with `enforce_sorted=False`, so
-                callers need not pre-sort the batch by length, and
-                `total_length=features.size(1)` so the unpacked output's
-                time dimension still matches the input's `max_time`) so
-                padded timesteps never enter the recurrence. Passing this
-                ALSO SPEEDS UP TRAINING, since cuDNN's packed-sequence
-                path skips computation on padding entirely rather than
-                computing (and then discarding) outputs for it -- this is
-                a performance benefit even in cases where it isn't needed
-                for correctness. REQUIRED in practice whenever
-                `bidirectional=True` (enforced by refusing that
-                configuration in `__init__` instead, since `forward`
-                cannot itself force every call site to supply this);
-                optional for the unidirectional default, where a causal
-                GRU's real-timestep outputs never depend on the padded
-                region regardless (see the module docstring's
-                "WHY PADDING MASKING MATTERS MORE FOR BIDIRECTIONAL").
-                NOTE: this does NOT address `_smooth`'s SEPARATE,
-                documented batch-composition-dependence limitation --
-                packing only changes what the GRU sees, not the
-                depthwise-conv smoothing step that runs before it.
+                docstring; they are NOT the same adjustment).
+                **REQUIRED -- passing `None` raises (see below).** Used
+                for two things, in this order:
+                  1. IMMEDIATELY AFTER `DayLayers`, EVERY timestep at or
+                     past `input_lengths[i]` is zeroed for item `i`,
+                     BEFORE `_smooth` runs. This is the fix for the
+                     verified batch-composition-dependence bug (see the
+                     module docstring's "PADDING MUST BE MASKED BEFORE
+                     SMOOTHING") -- without it, a trained `DayLayers`'
+                     nonzero bias leaks into the padded region, and
+                     `_smooth`'s depthwise conv then mixes that leaked
+                     constant into the last few real timesteps,
+                     differently depending on how much padding happened
+                     to be in the batch.
+                  2. The GRU is then run through
+                     `nn.utils.rnn.pack_padded_sequence` /
+                     `pad_packed_sequence` (with `enforce_sorted=False`,
+                     so callers need not pre-sort the batch by length,
+                     and `total_length=features.size(1)` so the unpacked
+                     output's time dimension still matches the input's
+                     `max_time`) so padded timesteps never enter the
+                     recurrence -- both for correctness (bidirectional,
+                     if ever re-enabled) and performance (cuDNN's
+                     packed-sequence path skips computation on padding
+                     entirely).
 
         Returns:
             `log_probs`: `(time, batch, n_classes)` float32 --
@@ -519,6 +527,12 @@ class GRUCTC(nn.Module):
                 transposed or otherwise mis-shaped input would otherwise
                 proceed silently (e.g. a `(batch, 512, time)` tensor
                 passed by mistake produces no error, just wrong output).
+                Also if `input_lengths is None` -- silent
+                batch-composition-dependence (see above) is worse than an
+                explicit failure, and every real call site
+                (`training/loop.py`) has `collate_trials`'s
+                `"input_lengths"` available, so there is no legitimate
+                caller this refusal inconveniences.
         """
         if features.shape[-1] != self.n_features:
             raise ValueError(
@@ -528,6 +542,17 @@ class GRUCTC(nn.Module):
                 f"input (e.g. (batch, n_features, time) instead of "
                 f"(batch, time, n_features)) would otherwise proceed "
                 f"silently."
+            )
+        if input_lengths is None:
+            raise ValueError(
+                "GRUCTC.forward: input_lengths is required (not "
+                "optional) -- it is used to mask padded timesteps to "
+                "zero immediately after DayLayers and before smoothing "
+                "(see the module docstring's 'PADDING MUST BE MASKED "
+                "BEFORE SMOOTHING'). Skipping this silently reintroduces "
+                "batch-composition-dependent outputs once DayLayers has "
+                "been trained; every real call site has collate_trials's "
+                "'input_lengths' available."
             )
 
         x = features
@@ -540,18 +565,24 @@ class GRUCTC(nn.Module):
         if self.day_layers is not None:
             x = self.day_layers(x, session_indices)
 
+        # THE FIX: zero every timestep >= input_lengths[i], for every
+        # batch item i, BEFORE _smooth runs -- see the module docstring.
+        # time_indices[t] < input_lengths[i] is True exactly for i's real
+        # (unpadded) timesteps; broadcasting against (batch, time, 1)
+        # zeroes every feature channel at every padded position.
+        time_indices = torch.arange(x.size(1), device=x.device)
+        valid_mask = time_indices.unsqueeze(0) < input_lengths.to(x.device).unsqueeze(1)
+        x = x * valid_mask.unsqueeze(-1)
+
         x = self._smooth(x)
 
-        if input_lengths is not None:
-            packed = nn.utils.rnn.pack_padded_sequence(
-                x, input_lengths.cpu(), batch_first=True, enforce_sorted=False,
-            )
-            packed_out, _ = self.gru(packed)
-            gru_out, _ = nn.utils.rnn.pad_packed_sequence(
-                packed_out, batch_first=True, total_length=x.size(1),
-            )
-        else:
-            gru_out, _ = self.gru(x)  # (batch, time, hidden_size * n_directions)
+        packed = nn.utils.rnn.pack_padded_sequence(
+            x, input_lengths.cpu(), batch_first=True, enforce_sorted=False,
+        )
+        packed_out, _ = self.gru(packed)
+        gru_out, _ = nn.utils.rnn.pad_packed_sequence(
+            packed_out, batch_first=True, total_length=x.size(1),
+        )
 
         logits = self.output(gru_out)  # (batch, time, n_classes)
         log_probs = F.log_softmax(logits, dim=-1)  # (batch, time, n_classes)

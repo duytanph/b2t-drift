@@ -1,10 +1,12 @@
 """Unit tests for `b2t_drift.models.gru_ctc.GRUCTC`, synthetic data only.
 
 Targets the fixes from the "Six tasks" review: padding masking around the
-GRU (Task 1a), the batch-composition-dependence of Gaussian smoothing
-(Task 1b, quantified rather than just asserted), the smoothing-buffer
-registration inconsistency (Task 1c), the input-shape assertion (Task 1d),
-and the trainable-vs-all parameter count distinction (Task 1e).
+GRU (Task 1a), the batch-composition-dependence of Gaussian smoothing --
+now FIXED by masking padding right after DayLayers, before smoothing
+(Task 1b of the "Implement the training loop" round; quantified rather
+than just asserted), the smoothing-buffer registration inconsistency
+(Task 1c), the input-shape assertion (Task 1d), and the trainable-vs-all
+parameter count distinction (Task 1e).
 """
 
 from __future__ import annotations
@@ -31,9 +33,22 @@ def test_bidirectional_true_raises_in_init() -> None:
         GRUCTC(n_sessions=1, bidirectional=True)
 
 
-def test_forward_with_input_lengths_matches_forward_without_for_unidirectional() -> None:
-    """Causal GRU: packing around padding must not change valid-timestep
-    outputs, only skip computing (never using) the padded ones."""
+def test_input_lengths_none_raises() -> None:
+    """input_lengths is now mandatory (not an opt-out default) -- see the
+    module docstring's 'PADDING MUST BE MASKED BEFORE SMOOTHING'."""
+    model = _tiny_model()
+    features = torch.randn(2, 10, 512)
+    session_indices = torch.zeros(2, dtype=torch.int64)
+    with pytest.raises(ValueError, match="input_lengths"):
+        model(features, session_indices)
+
+
+def test_packing_matches_direct_gru_call_for_unidirectional() -> None:
+    """Packing (mandatory, now that input_lengths is required) must not
+    change valid-timestep outputs for a causal GRU, only skip computing
+    (never using) the padded ones -- verified against an independent,
+    unpacked reference that manually replicates forward()'s pre-GRU
+    steps (mask, then smooth) and calls model.gru directly."""
     torch.manual_seed(0)
     model = _tiny_model(smoothing_sigma_bins=0.0)  # isolate the GRU packing effect
     model.eval()
@@ -47,16 +62,28 @@ def test_forward_with_input_lengths_matches_forward_without_for_unidirectional()
     input_lengths = torch.tensor([short_len, long_len], dtype=torch.int64)
 
     with torch.no_grad():
-        packed = model(batch, session_indices, input_lengths=input_lengths)
-        unpacked = model(batch, session_indices)
+        packed_log_probs = model(batch, session_indices, input_lengths=input_lengths)
 
-    assert packed.shape == unpacked.shape == (long_len, 2, model.n_classes)
+        # Independent (unpacked) reference: replicate forward()'s
+        # pre-GRU steps by hand, then call the GRU directly.
+        x = batch
+        if model.day_layers is not None:
+            x = model.day_layers(x, session_indices)
+        time_indices = torch.arange(x.size(1))
+        valid_mask = time_indices.unsqueeze(0) < input_lengths.unsqueeze(1)
+        x = x * valid_mask.unsqueeze(-1)
+        x = model._smooth(x)
+        gru_out_direct, _ = model.gru(x)
+        logits_direct = model.output(gru_out_direct)
+        log_probs_direct = torch.nn.functional.log_softmax(logits_direct, dim=-1).transpose(0, 1)
+
+    assert packed_log_probs.shape == log_probs_direct.shape == (long_len, 2, model.n_classes)
     # Valid region of the short trial must match regardless of packing.
     assert torch.allclose(
-        packed[:short_len, 0, :], unpacked[:short_len, 0, :], atol=1e-5,
+        packed_log_probs[:short_len, 0, :], log_probs_direct[:short_len, 0, :], atol=1e-5,
     )
     # The long trial has no padding at all -- packing changes nothing.
-    assert torch.allclose(packed[:, 1, :], unpacked[:, 1, :], atol=1e-5)
+    assert torch.allclose(packed_log_probs[:, 1, :], log_probs_direct[:, 1, :], atol=1e-5)
 
 
 def test_forward_input_lengths_zeroes_padded_region_after_unpacking() -> None:
@@ -89,45 +116,39 @@ def test_forward_input_lengths_zeroes_padded_region_after_unpacking() -> None:
 
 def _batch_composition_diff(model: GRUCTC, short_len: int = 30, long_len: int = 120) -> float:
     """Max abs log_probs difference for one trial decoded alone vs. padded
-    inside a larger batch, over the trial's own valid timesteps."""
+    inside a larger batch, over the trial's own valid timesteps. Passes
+    input_lengths for BOTH calls (mandatory since the fix -- see the
+    module docstring)."""
     torch.manual_seed(1)
     trial = torch.randn(1, short_len, 512)
     session_idx = torch.zeros(1, dtype=torch.int64)
+    alone_lengths = torch.tensor([short_len], dtype=torch.int64)
 
     with torch.no_grad():
-        alone = model(trial, session_idx)
+        alone = model(trial, session_idx, input_lengths=alone_lengths)
 
         padded_batch = torch.zeros(2, long_len, 512)
         padded_batch[0, :short_len] = trial[0]
         padded_batch[1] = torch.randn(long_len, 512)
-        batched = model(padded_batch, torch.zeros(2, dtype=torch.int64))
+        batch_lengths = torch.tensor([short_len, long_len], dtype=torch.int64)
+        batched = model(
+            padded_batch, torch.zeros(2, dtype=torch.int64), input_lengths=batch_lengths,
+        )
 
     alone_valid = alone[:, 0, :]
     batched_valid = batched[:short_len, 0, :]
     return (alone_valid - batched_valid).abs().max().item()
 
 
-def test_smoothing_batch_composition_sensitivity_reports_magnitude(capsys) -> None:
-    """Quantifies the documented `_smooth` limitation, for BOTH cases its
-    corrected docstring distinguishes:
-
-    - A FRESHLY CONSTRUCTED model (DayLayers still at its identity
-      init): the collate-padding zeros and F.conv1d's own implicit edge
-      zero-padding are mathematically indistinguishable, so this should
-      measure ~0 (verified directly, not assumed -- see _smooth's
-      docstring for why an earlier, vaguer version of this claim was
-      imprecise about the mechanism).
-    - A model whose DayLayers has been perturbed away from identity
-      (simulating a post-training state, via a nonzero bias): now the
-      collate-padding gets mapped to that nonzero bias BEFORE smoothing
-      sees it, which genuinely differs from conv1d's own zero
-      edge-padding in the alone case -- this should be clearly nonzero.
-
-    Reports both magnitudes rather than gating on a tight threshold --
-    the second case is EXPECTED to be nonzero, per _smooth's docstring;
-    the point is visibility, not a pass/fail bar on a known, accepted
-    effect.
-    """
+def test_smoothing_batch_composition_sensitivity_below_threshold_after_fix(capsys) -> None:
+    """THE FIX, verified: forward() now masks every padded timestep to
+    zero immediately after DayLayers and before _smooth runs, so a
+    TRAINED (nonzero-bias) DayLayers can no longer leak its bias into the
+    padded region for smoothing to mix into real timesteps. Both the
+    fresh (identity-init) and trained (nonzero-bias) cases must now be
+    below 1e-5 -- reports the measured values (previously 0.0755 for the
+    trained case, before this fix; see docs/DESIGN.md's "Model
+    hyperparameters" section)."""
     torch.manual_seed(0)
     fresh_model = GRUCTC(n_sessions=1, n_layers=1, hidden_size=16, use_day_layers=True)
     fresh_model.eval()
@@ -140,23 +161,18 @@ def test_smoothing_batch_composition_sensitivity_reports_magnitude(capsys) -> No
         trained_model.day_layers.biases[0] = torch.randn(512) * 0.5
     trained_diff = _batch_composition_diff(trained_model)
 
-    print("\n[Task 1(b)] max abs log_probs difference, trial alone vs. "
-          "padded in a larger batch:")
-    print(f"[Task 1(b)]   fresh (identity-init) DayLayers:  {fresh_diff:.8f}")
-    print(f"[Task 1(b)]   trained (nonzero-bias) DayLayers: {trained_diff:.8f}")
-    if trained_diff > 1e-3:
-        print("[Task 1(b)] the trained case exceeds 1e-3 -- this is the "
-              "documented, accepted batch-composition-dependence of "
-              "smoothing (once DayLayers has moved off identity), not a bug.")
+    print("\n[Task 1] max abs log_probs difference, trial alone vs. "
+          "padded in a larger batch, AFTER the padding-mask-before-"
+          "smoothing fix:")
+    print(f"[Task 1]   fresh (identity-init) DayLayers:  {fresh_diff:.8f}")
+    print(f"[Task 1]   trained (nonzero-bias) DayLayers: {trained_diff:.8f}")
 
     captured = capsys.readouterr()
     assert "max abs log_probs difference" in captured.out
     assert math.isfinite(fresh_diff)
     assert math.isfinite(trained_diff)
-    # The corrected docstring's central claim, made checkable: a fresh
-    # model shows (near-)zero batch-dependence; a trained-bias one does not.
-    assert fresh_diff < 1e-4
-    assert trained_diff > fresh_diff
+    assert fresh_diff < 1e-5
+    assert trained_diff < 1e-5
 
 
 # --- Task 1(c): smoothing buffer registration consistency -------------------
