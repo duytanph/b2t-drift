@@ -1093,3 +1093,96 @@ document, on this date, before any training run has produced a PER
 number, is what makes the eventual selection a principled decision rather
 than a post-hoc one — the distinction is entirely about *when* the rule
 was written down, not about whether the rule sounds reasonable.
+
+---
+
+## 13. Model hyperparameters (2026-09-03)
+
+`src/b2t_drift/models/gru_ctc.py`'s `GRUCTC.__init__` and
+`src/b2t_drift/models/day_layers.py`'s `DayLayers` are this project's only
+model family (`CLAUDE.md`: no premature abstraction, one model family, one
+dataset). Every default value below is recorded here, with the same tag
+used in the source docstring, so the reasoning lives outside the code too
+and survives a refactor that might otherwise lose it. Tags: `[principled]`
+(derived from a physical or architectural argument), `[convention]`
+(standard in this specific literature), `[judgment call]` (a reasonable
+choice given constraints, not derived from first principles), or `[fixed
+by data]` (not a free hyperparameter at all).
+
+- **`n_layers = 3`.** Baseline uses 5. Reduced because our Switchboard-
+  only training set is 3,150 trials versus roughly 8,000 for the
+  baseline; depth is the first thing to cut when data is limited. Three
+  is also the common floor for sequence models of this kind — below that,
+  RNNs tend to underfit temporal structure. `[judgment call — revisit if
+  the baseline underfits]`
+- **`hidden_size = 512`.** Pretrained checkpoint uses 768. Reduced for
+  the same data-budget reason. 512 also matches the input dimension,
+  which keeps the first layer square. `[judgment call — sweep this]`
+- **`dropout = 0.4`.** High by general ML standards, standard in this
+  specific literature. Willett's speech RNN and its descendants use
+  heavy regularization because the datasets are small and the input is
+  noisy. `[convention]`
+- **`bidirectional = False`.** A bidirectional GRU sees the entire
+  utterance before emitting, which is fine offline but impossible in a
+  real-time system. The deployed system emits a phoneme every 80 ms
+  while the participant is still speaking. Since this project measures a
+  realistically-configured decoder, causal is the honest default.
+  Bidirectional would improve offline PER and is a legitimate ablation,
+  but must not be the default. `[principled]`
+- **`smoothing_sigma_bins = 2.0`.** From the published pipeline (sigma =
+  2 bins = 40 ms). Physical argument: articulatory gestures last roughly
+  50-150 ms, so 40 ms of smoothing averages away per-bin spike-count
+  variance without blurring the gestures being decoded. Both documented
+  in the literature and derivable from the timescale of speech.
+  `[principled]`
+- **`n_classes = 41`.** Not a hyperparameter. CTC blank (0) + 39 ARPABET
+  phonemes (1-39) + silence (40), verified empirically against
+  `seq_class_ids` (`b2t_drift.phonemes`). `[fixed by data]`
+- **`input_dropout = 0.0`.** Off by default. Channel dropout simulating
+  electrode failure is a Week 2 experiment, not a training default —
+  enabling it now would confound the baseline. `[judgment call]`
+- **`n_features = 512`.** Not swept above with the others because it
+  isn't tunable at all: 256 threshold-crossing + 256 spike-band-power
+  channels at 20 ms bins, the released HDF5 `input_features` layout, with
+  no patching or stride applied in this version (see the next item).
+  `[fixed by data]`
+- **Plain 512-dim input, no 14-bin/stride-4 concatenation.** The
+  published baseline concatenates 14 consecutive 20 ms bins at stride 4
+  before its GRU (a 7,168-dim input, an effective 80 ms output stride).
+  This version does not — that comparison is an explicit later addition,
+  not an inherited default (`src/b2t_drift/models/gru_ctc.py`'s module
+  docstring, "THE CTC LENGTH CONTRACT"). Because there is no downsampling
+  here, `input_lengths` pass through `GRUCTC.ctc_input_lengths` UNCHANGED;
+  adding stride later requires dividing them first before `nn.CTCLoss`
+  (`CLAUDE.md`'s "known pitfalls" — the single most likely place for a
+  silent bug in this pipeline, since a wrong length corrupts the loss
+  without raising). `ctc_input_lengths` exists specifically so that fix
+  has exactly one place to happen. `[principled]`
+- **`use_day_layers = True`, day layers initialize to IDENTITY.**
+  Confirmed from the pretrained baseline checkpoint
+  (`day_weights.0`..`44`, `day_biases.0`..`44` are identity/zero before
+  session-specific fine-tuning). A session with no trained layer must
+  fall back to a no-op rather than a random projection — this is what
+  makes the Week 3 "how much calibration data does a new day need"
+  question well-posed: zero calibration data corresponds to the
+  identity transform, a meaningful, interpretable baseline, rather than
+  to an arbitrary starting point. `[principled]`
+
+**Memory cost of `DayLayers`.** `weights` is dense, `(n_sessions,
+n_features, n_features)` float32 — at this project's scale (45 sessions,
+512 features), `45 × 512 × 512 × 4 bytes ≈ 47 MB`, a large fraction of
+this model's total parameter count. Not a negligible add-on; sized
+deliberately (`src/b2t_drift/models/day_layers.py`'s module docstring).
+
+**Per-session freezing (Week 3) uses a gradient hook, not
+`requires_grad`.** `requires_grad` is a per-tensor flag; there is no way
+to mark one session's slice of a single `(n_sessions, ...)` parameter
+tensor as trainable while the rest stay frozen through `requires_grad`
+alone. `DayLayers.freeze_all_except(session_index)` /
+`unfreeze_all()` instead register a gradient hook that zeroes every
+other session's slice at backward time. Caveat recorded in the source:
+Adam's momentum state can still apply a few steps of small, decaying
+residual updates to a newly-frozen slice if that slice had nonzero
+optimizer state before freezing — for an exact freeze, call
+`freeze_all_except` before the fine-tuning optimizer has taken any
+steps, or construct a fresh optimizer for that phase.
