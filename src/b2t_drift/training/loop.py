@@ -343,7 +343,15 @@ def evaluate(
         A dict with keys:
           - `"loss"`: trial-count-weighted average CTC loss.
           - `"per"`: `evaluation.metrics.aggregate_error_rate` over every
-            trial's `EditCounts`, or `None` if `compute_per=False`.
+            trial's `EditCounts`, or `None` if `compute_per=False`. A
+            FRACTION (edits / reference phonemes), NOT a percentage --
+            `0.35` means 35% PER, and values above `1.0` are legitimate
+            (more edits than reference phonemes, e.g. from an
+            undertrained model whose decode is mostly insertions -- see
+            `evaluation.metrics.aggregate_error_rate`'s docstring). This
+            convention is used consistently everywhere PER is computed,
+            logged, or written by this module -- nothing here multiplies
+            by 100.
           - `"counts"`: `list[EditCounts]`, one per trial, in dataloader
             order -- suitable input to
             `evaluation.metrics.bootstrap_error_rate_ci`. Empty if
@@ -441,6 +449,12 @@ def fit(
     ones), and stopping on loss would risk selecting a checkpoint that is
     NOT the best decoder by the metric that actually matters here. This
     is a deliberate choice, not the more common "stop on loss" default.
+
+    `val_per` (here, in `metrics.csv`'s `val_per` column, and in every
+    logger this function drives) is always a FRACTION, not a percentage
+    -- see `evaluate`'s `"per"` docstring entry. A freshly-initialized or
+    barely-trained model routinely reports `val_per > 1.0` (e.g. `3.59`
+    means 359% PER, not 3.59%); this is expected, not a units bug.
 
     Args:
         model, train_loader, val_loader, optimizer, criterion, device:

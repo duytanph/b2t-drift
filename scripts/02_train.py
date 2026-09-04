@@ -60,10 +60,23 @@ def _build_dataloader(
     n_workers: int,
     limit: int | None,
     drop_last: bool,
+    pin_memory: bool,
 ) -> tuple[DataLoader, LengthBucketedSampler]:
     """One `DataLoader` + its `LengthBucketedSampler`, for `partition`
     ("train" or "val") of `split`. `limit` truncates the trial list to
-    its first `limit` entries -- used only by `--smoke`."""
+    its first `limit` entries -- used only by `--smoke`.
+
+    `num_workers=0` is a documented, decided-against configuration for
+    real training or evaluation runs (`docs/DESIGN.md` section 8,
+    `scratch/benchmark_dataloader.py`: 380 ms/batch at num_workers=0 vs.
+    35 ms/batch at num_workers=2, against a ~230 ms/step fp16 compute
+    budget -- num_workers=0 does not clear that bar and becomes the
+    training bottleneck). `persistent_workers=True` avoids re-paying
+    Windows `spawn` worker-startup cost (~1-2s) every epoch; `pin_memory`
+    is enabled whenever workers are used AND a GPU is in play, since it
+    only helps CPU->GPU transfer and costs otherwise-idle pinned host
+    memory for nothing on a CPU-only run.
+    """
     trial_ids = split_to_trial_ids(split, data_root, partition)
     if limit is not None:
         trial_ids = trial_ids[:limit]
@@ -72,6 +85,7 @@ def _build_dataloader(
     sampler = LengthBucketedSampler(trial_ids, batch_size=batch_size, drop_last=drop_last)
     dataloader = DataLoader(
         dataset, batch_sampler=sampler, collate_fn=collate_trials, num_workers=n_workers,
+        persistent_workers=n_workers > 0, pin_memory=pin_memory and n_workers > 0,
     )
     return dataloader, sampler
 
@@ -134,18 +148,21 @@ def main() -> None:
     train_limit = SMOKE_N_TRAIN if args.smoke else None
     val_limit = SMOKE_N_VAL if args.smoke else None
 
+    pin_memory = torch.cuda.is_available()
     train_loader, train_sampler = _build_dataloader(
         data_root, split, "train", session_to_index,
         batch_size=training_config["batch_size"], n_workers=training_config["num_workers"],
-        limit=train_limit, drop_last=True,
+        limit=train_limit, drop_last=True, pin_memory=pin_memory,
     )
     val_loader, _ = _build_dataloader(
         data_root, split, "val", session_to_index,
         batch_size=training_config["batch_size"], n_workers=training_config["num_workers"],
-        limit=val_limit, drop_last=False,
+        limit=val_limit, drop_last=False, pin_memory=pin_memory,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
     model = GRUCTC(
         n_sessions=len(session_to_index),
         hidden_size=model_config["hidden_size"],
@@ -207,6 +224,9 @@ def main() -> None:
     )
 
     print(f"[02_train] done: {summary}")
+    if device.type == "cuda":
+        peak_mb = torch.cuda.max_memory_allocated(device) / 1e6
+        print(f"[02_train] peak GPU memory (torch.cuda.max_memory_allocated): {peak_mb:.1f} MB")
 
     if summary["best_epoch"] is not None:
         # Sanity check: the saved checkpoint_best.pt actually loads back

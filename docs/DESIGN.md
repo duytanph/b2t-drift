@@ -457,6 +457,31 @@ baseline needed — see Task 4 findings in section 12.
   to the ~230 ms budget either clears comfortably; **`num_workers=2` is
   the chosen default**, leaving more CPU headroom for anything else
   running on the same machine during training.
+
+  > **UPDATE, 2026-09-04, from a full-scale real-data measurement
+  > (`scratch/measure_timing.py`, `scratch/measure_timing_nw4.py`) --
+  > `num_workers=2` does NOT actually clear the compute budget at real
+  > scale, and the default is revised to `num_workers=4`.** The benchmark
+  > above used synthetic, fixed-length tensors; run for real against the
+  > full 3,150-trial `temporal_s01_s15_switchboard` train set (real
+  > variable-length HDF5 reads, `GRUCTC` at its default hyperparameters,
+  > batch_size=32, 98 batches/epoch), steady-state epochs (epoch 2 of 3;
+  > epoch 0 pays one-time worker-spawn cost) spent **74% of epoch time
+  > waiting on the dataloader at `num_workers=2`** (217.4s of 292.8s).
+  > `num_workers=4` cut steady-state epoch time by ~29% (317.2s -> 224.3s,
+  > comparing each config's second epoch) but did NOT eliminate the
+  > bottleneck -- wait time was still 68.5% of epoch time at
+  > `num_workers=4` (153.6s of 224.3s). **The dataloader remains the
+  > dominant cost at both settings**; this is a real, unresolved
+  > performance gap between the smaller/synthetic benchmark's conclusion
+  > and full-scale behavior, flagged here as a genuine follow-up
+  > investigation (candidates: real per-trial HDF5 read cost at the
+  > actual, wide `n_time_steps` distribution vs. the benchmark's fixed
+  > length; CPU contention between worker processes and the main
+  > process's own per-batch work; higher `num_workers` values untested
+  > here), not something this config bump resolves on its own.
+  > `configs/experiment/switchboard_baseline.yaml`'s `num_workers` is
+  > updated to `4` on this evidence.
 - **Normalization is already applied, and is NOT block/session/global —
   it's a rolling per-channel, per-sentence window. [RESOLVED 2026-09-02,
   by author correspondence — see `docs/DATASET.md` section 9.]** Earlier
@@ -484,11 +509,40 @@ baseline needed — see Task 4 findings in section 12.
 - **GPU budget is not a constraint on model size.** The Task 3 benchmark
   (section 12) showed the full baseline architecture (5 layers, 1024
   hidden) trains in ~1.3 hours per 10,000 steps at fp32 on this machine,
-  with no OOM risk even at batch=64. This is also what makes the section
-  7 cut-point sweep affordable (~6 hours for all four runs). Ablations and
-  the main drift-curve runs can use the full-size model throughout — there
-  is no need to fall back to the "small" (3 layer, 512 hidden) config to
-  fit time or memory budgets.
+  with no OOM risk even at batch=64. Ablations and the main drift-curve
+  runs can use the full-size model throughout — there is no need to fall
+  back to the "small" (3 layer, 512 hidden) config to fit a GPU memory
+  budget (peak VRAM was and remains comfortably under 8 GB -- the real
+  training loop's own full-scale measurement, 2026-09-04, found 1.75 GB
+  peak for the small/default config on the full s01-s15 Switchboard set).
+
+  > **CORRECTION, 2026-09-04: "~6 hours for all four runs" was a
+  > GPU-compute-only estimate that never included the dataloader, and is
+  > wrong as a wall-clock affordability claim.** The full-scale timing
+  > measurement above (this section's DataLoader UPDATE) found the
+  > dataloader, not GPU compute, is the dominant cost: 74% of
+  > steady-state epoch time at `num_workers=2`, still 68.5% at
+  > `num_workers=4`. Measured on the actual default (small: 3-layer,
+  > 512-hidden) config, full pipeline (data + compute), `s01-s15` alone:
+  > **224.3s/epoch steady-state at `num_workers=4`** (304.98s/epoch at
+  > `num_workers=2`), i.e. **~6.2 hours for 100 epochs of ONE cut
+  > point**, not all four. Extrapolated LINEARLY by train-batch count
+  > (98/65/28/104 batches/epoch for s15/s10/s05/s20 respectively) to 100
+  > epochs on every one of the four Switchboard cut-point sweep splits:
+  >
+  > | cut | train batches/epoch | s/epoch @ nw=4 | 100 epochs @ nw=4 | 100 epochs @ nw=2 |
+  > |---|---|---|---|---|
+  > | s01-s05 | 28 | 64.1s | 1.78h | 2.42h |
+  > | s01-s10 | 65 | 148.8s | 4.13h | 5.62h |
+  > | s01-s15 | 98 | 224.3s | 6.23h | 8.47h |
+  > | s01-s20 | 104 | 238.1s | 6.61h | 8.99h |
+  > | **all four, summed** | | | **18.76h** | **25.50h** |
+  >
+  > Both totals are upper bounds: `patience=5` (the configured default)
+  > will very likely stop most runs well short of 100 epochs in
+  > practice, and `num_workers=4` did not close the dataloader gap
+  > (still the dominant cost, per above) -- treat 100 epochs as a worst
+  > case for planning, not an expected runtime.
 
 ---
 
