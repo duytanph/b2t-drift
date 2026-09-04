@@ -171,8 +171,9 @@ def test_greedy_decode_recovers_at_least_one_trial(gate_run) -> None:
 
     decoded = greedy_ctc_decode(
         log_probs.transpose(0, 1),  # (time, batch, C) -> (batch, time, C)
-        blank_index=BLANK_INDEX,
         lengths=batch["input_lengths"],
+        blank_index=BLANK_INDEX,
+        n_classes=N_CLASSES,
     )
     true_targets = [item["targets"].tolist() for item in items]
 

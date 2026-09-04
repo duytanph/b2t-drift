@@ -507,6 +507,43 @@ pruned n-gram or a rented large-memory instance. Report PER as primary and
 say plainly that WER was not computed, rather than reporting only PER
 without saying why.
 
+### PER computation: silence is scored, not excluded
+
+**DECIDED: silence (class 40) is INCLUDED in PER.** CTC blanks are
+removed and consecutive repeats are collapsed per the standard decoding
+procedure (`greedy_ctc_decode`, `src/b2t_drift/evaluation/ctc_decode.py`),
+but the silence token itself is NOT removed -- it is scored as a regular
+token, exactly like any of the 39 phonemes, in the Levenshtein alignment
+against the ground-truth sequence (`evaluation.edit_distance`) that
+`aggregate_error_rate` / `bootstrap_error_rate_ci`
+(`evaluation.metrics`) build PER from.
+
+**Field convention.** The Brain-to-Text lineage uses a 41-token
+vocabulary -- 39 phonemes, silence, and the CTC blank -- and computes PER
+by removing repeats and blanks from the decoded sequence, taking
+Levenshtein distance to the ground-truth phoneme sequence (which itself
+contains silence tokens), and normalizing by the total number of
+ground-truth phonemes. This project follows that convention rather than
+inventing its own.
+
+**Why.** Silence marks word boundaries. A decoder that gets every
+phoneme right but misplaces the silence tokens between them produces
+text a downstream language model cannot use for word segmentation
+(`docs/DATASET.md` section 15) -- since the pipeline this metric is
+meant to stand in for depends on those boundaries, excluding silence
+from PER would make the decoder look better than it actually performs
+for that purpose.
+
+**Week 2 caveat -- affects visualization only, not PER.** Silence is
+roughly 25% of all tokens (5 of 21 in `trial_0149`; `docs/DATASET.md`
+section 14: "silence will dominate any confusion matrix"). Any phoneme
+confusion matrix built in Week 2 will be visually dominated by the
+silence row/column if plotted at the same scale as every other class.
+**Plot silence separately, or normalize per row**, when building that
+matrix. This does not change PER itself -- PER is a single aggregate
+number, computed the same way regardless of how a confusion matrix is
+later drawn -- it only affects how that matrix should be read.
+
 ---
 
 ## 10. Stated limitations
@@ -584,17 +621,38 @@ any implementation work in `src/b2t_drift/data`, `models`, or `training`
 begins, and in the case of anything touching evaluation, **before looking
 at any PER value**, per the validation-set rule in section 7.
 
-- **WARM-UP TRIALS.** Decide whether to exclude the first N trials of each
-  session from evaluation (per the normalization-artifact limitation in
-  section 10), and if so, what N. This decision — and its rationale —
-  must be made and recorded in this section **before** any PER values from
-  any model are examined. As of this writing the decision has not yet been
-  made; this is a placeholder to be filled in when it is, not a decision by
-  omission. Candidate considerations for whoever makes this call: the
-  rolling window reaches full width at sentence 20, so N=20 is a natural
-  starting candidate, but the right choice should weigh how much of each
-  held-out session's already-small trial budget (as few as 80 trials in
-  the earliest held-out sessions) a fixed N would consume.
+- **WARM-UP TRIALS. DECIDED 2026-09-03: keep all trials, exclude none.**
+  This decision, and the reasoning behind it, was recorded here BEFORE
+  any PER value from any model was examined -- per this section's own
+  rule that such decisions must precede looking at any PER value.
+
+  **The case against keeping them.** The rolling z-score normalization
+  uses up to the previous 20 sentences (`docs/DATASET.md` section 9), so
+  the first ~20 trials of each session are normalized on a
+  partially-filled window (as few as 1 prior sentence for the very
+  first trial of a session) and are noisier as a result -- section 10's
+  "still-filling window" limitation.
+
+  **The case for keeping them, which won out:**
+  - Excluding them discards data from sessions that are already small --
+    as few as 80 trials in the earliest held-out sessions (section 7). A
+    fixed N=20 exclusion would remove a quarter of that session's
+    already-scarce evaluation budget.
+  - The exclusion threshold N would itself be an arbitrary parameter --
+    trading one uncontrolled-noise problem for a new, undocumented
+    tunable choice with no principled way to set it.
+  - Every session is affected by this window-filling effect EQUALLY: it
+    happens once, always at the start of each session's own trial
+    sequence, regardless of that session's calendar date. The effect
+    therefore does not trend with elapsed time and cannot masquerade as
+    drift -- at worst it adds noise uniformly to every session's PER,
+    rather than biasing the drift curve's shape in one direction.
+
+  **Consequence.** Readers of the drift curve should expect somewhat
+  noisier per-trial behavior at the start of any session's evaluated
+  trials, but this is accounted for by the mandatory bootstrap
+  confidence intervals (section 7, `evaluation.metrics.
+  bootstrap_error_rate_ci`) rather than by trial exclusion.
 
 ---
 

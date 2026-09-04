@@ -12,12 +12,17 @@ ARCHITECTURE, in forward order:
   2. (optional) `DayLayers`: per-session affine transform. See
      `models/day_layers.py`.
   3. (optional) Gaussian temporal smoothing: fixed, non-learned depthwise
-     `conv1d` over the time axis. See `_smooth`.
+     `conv1d` over the time axis. See `_smooth` -- including a documented
+     batch-composition-dependence limitation.
   4. `nn.GRU`: the shared recurrent encoder. Uses PyTorch's built-in,
      cuDNN-backed implementation directly -- NOT a hand-rolled per-timestep
      loop, which would be 10-50x slower on GPU because it can't use
      cuDNN's fused RNN kernels. Do not "unroll" this for debuggability;
-     use `torch.autograd` / a debugger on the fused op instead.
+     use `torch.autograd` / a debugger on the fused op instead. Optionally
+     run through `pack_padded_sequence`/`pad_packed_sequence` when
+     `forward`'s `input_lengths` argument is given -- see `forward`'s
+     docstring for when this is required (bidirectional) versus optional
+     (unidirectional).
   5. A linear projection to `n_classes` logits, then `log_softmax` over the
      class dimension.
 
@@ -38,6 +43,16 @@ later, there is exactly one place in this file that has to change, and
 every call site that already routes lengths through it picks up the fix
 automatically instead of needing to be found and edited individually.
 
+NOTE: `ctc_input_lengths` (the CTC-loss length adjustment) and `forward`'s
+optional `input_lengths` argument (padding masking around the GRU) are
+TWO DIFFERENT USES of the same underlying per-trial timestep counts from
+`collate_trials`. They happen to be the identity function's input and a
+`pack_padded_sequence` call's input respectively, in this no-downsampling
+version, but they answer different questions ("how long is this
+sequence for the loss" vs. "where does padding start for the RNN") and
+must both be threaded through independently -- fixing one does not fix
+the other.
+
 THE TIME-FIRST OUTPUT CONVENTION. `forward` returns `log_probs` shaped
 `(time, batch, n_classes)`, matching `torch.nn.CTCLoss`'s required
 `log_probs` layout directly -- CALLERS MUST NOT TRANSPOSE, AND MUST NOT
@@ -48,6 +63,24 @@ than-1-in-log-space... more precisely, doubly-normalized and numerically
 wrong) loss without `nn.CTCLoss` raising anything, since it takes
 log-probabilities on faith and never itself checks that they came from
 exactly one `log_softmax`.
+
+WHY PADDING MASKING MATTERS MORE FOR BIDIRECTIONAL THAN UNIDIRECTIONAL.
+Padding a batch pads only past the end of each sequence's real data
+(`data/collate.py`), never before its start. A UNIDIRECTIONAL (causal)
+GRU's hidden state at real timestep `t` depends only on inputs at times
+`<= t` -- it never sees the padded region at all while producing any
+output CTC will actually use (`input_lengths`, passed to `nn.CTCLoss`,
+tells CTC to ignore outputs past each item's real length). Padding is
+therefore harmless for the default `bidirectional=False` configuration,
+even without `forward`'s optional `input_lengths` packing argument --
+packing there is a pure performance optimization (skipping computation
+on padding), not a correctness requirement. A BIDIRECTIONAL GRU is
+different: its backward-direction pass starts at `max_time` (inside the
+padded region) and runs backward THROUGH the padding into every real
+timestep, so every output in the sequence is contaminated by whatever
+happens to be sitting in the pad region -- silently, since nothing here
+raises. This is why `bidirectional=True` is refused outright in
+`__init__` rather than left as a footgun (see `__init__`'s docstring).
 
 DEVIATIONS FROM THE PUBLISHED BASELINE, gathered in one place:
   - Plain 512-dim input at 20 ms bins, no 14-bin/stride-4 concatenation
@@ -109,7 +142,8 @@ class GRUCTC(nn.Module):
     and fixed Gaussian temporal smoothing.
 
     See the module docstring for the full architecture, the CTC length
-    contract, and the time-first output convention.
+    contract, the time-first output convention, and why padding masking
+    matters more for `bidirectional=True` than the unidirectional default.
     """
 
     def __init__(
@@ -183,6 +217,18 @@ class GRUCTC(nn.Module):
                 realistically-configured decoder, causal is the honest
                 default. Bidirectional would improve offline PER and is
                 a legitimate ablation, but must not be the default.
+                **`True` is currently REFUSED (raises `ValueError` right
+                here in `__init__`)**: a bidirectional GRU's
+                backward-direction pass runs through the padded region
+                into every real timestep, contaminating the whole
+                sequence, unless `forward`'s `input_lengths` argument is
+                given on EVERY call so the GRU can pack around padding --
+                `forward` cannot itself guarantee that (it's an optional
+                argument), so this configuration is refused at
+                construction time rather than left to silently corrupt
+                outputs at whichever call site forgets to pass lengths.
+                Revisit once there is a way to make `input_lengths`
+                mandatory specifically when `bidirectional=True`.
                 `[principled]`
             use_day_layers: True. Whether to apply `DayLayers` at all.
                 Not one of the four explicitly-justified hyperparameters
@@ -212,8 +258,28 @@ class GRUCTC(nn.Module):
                 the literature and derivable from the timescale of
                 speech. Set to 0 to disable smoothing entirely (identity
                 -- see `_smooth`). `[principled]`
+
+        Raises:
+            ValueError: If `bidirectional=True` (not yet supported --
+                see `bidirectional`'s entry above).
         """
         super().__init__()
+
+        if bidirectional:
+            raise ValueError(
+                "GRUCTC.__init__: bidirectional=True is not yet "
+                "supported. A bidirectional GRU's backward-direction "
+                "pass starts inside the padded region and runs through "
+                "it into every real timestep, contaminating the whole "
+                "sequence, unless input_lengths is passed to EVERY "
+                "forward() call so the GRU can pack/unpack around "
+                "padding -- forward() cannot guarantee that on its own "
+                "(input_lengths is an optional argument there), so this "
+                "configuration is refused here rather than left to "
+                "silently corrupt outputs on whichever call site forgets "
+                "to pass lengths."
+            )
+
         self.n_sessions = n_sessions
         self.n_features = n_features
         self.hidden_size = hidden_size
@@ -246,7 +312,38 @@ class GRUCTC(nn.Module):
             )
         else:
             self._smoothing_radius = 0
-            self._smoothing_kernel = None
+            # Registered as a (None-valued) buffer, NOT a plain instance
+            # attribute, even though there is no tensor to store yet.
+            # Fixes a real inconsistency: a plain `self._smoothing_kernel
+            # = None` here is invisible to `nn.Module` machinery (never
+            # appears in `self._buffers`, `named_buffers()`, or
+            # `._apply()`/`.to(device)`'s traversal), so IF this attribute
+            # were ever reassigned a real tensor after construction, it
+            # would silently stay an untracked plain attribute forever
+            # rather than a proper buffer. `register_buffer(..., None)`
+            # closes that gap: `_smoothing_kernel` is now a registered
+            # buffer slot either way, so a later `self._smoothing_kernel
+            # = some_tensor` assignment updates the SAME registered slot,
+            # consistent with the smoothing-enabled branch.
+            #
+            # CAVEAT, stated precisely rather than overclaimed: this does
+            # NOT make `state_dict()`'s key SET identical between
+            # smoothing-on and smoothing-off models -- PyTorch's
+            # `state_dict()`/`named_buffers()` both skip a buffer whose
+            # current value is None (verified empirically; a None buffer
+            # never round-trips through `state_dict()`/`load_state_dict`
+            # regardless of registration), so `state_dict()` still omits
+            # `_smoothing_kernel` entirely when smoothing is off. What
+            # this fix actually guarantees is narrower and still real:
+            # `_smoothing_kernel` is a known buffer NAME in
+            # `self._buffers` in both configurations (see
+            # `tests/test_gru_ctc.py`'s buffer-consistency test), so
+            # every OTHER state_dict key (day_layers.*, gru.*, output.*)
+            # is unaffected by this toggle, and the module's own
+            # attribute-tracking machinery treats the two configurations
+            # uniformly rather than one being a real buffer and the other
+            # an ad hoc Python attribute.
+            self.register_buffer("_smoothing_kernel", None)
 
         self.gru = nn.GRU(
             input_size=n_features,
@@ -266,6 +363,51 @@ class GRUCTC(nn.Module):
         is not a regularizer that should only act during training; it
         matches the published pipeline's fixed preprocessing step, which
         is a property of the FEATURES, not of the training regime.
+
+        KNOWN LIMITATION: OUTPUT CAN DEPEND ON BATCH COMPOSITION, ONCE
+        `DayLayers` HAS BEEN TRAINED. With the default
+        `smoothing_sigma_bins=2.0`, the kernel radius is `ceil(3*2) = 6`
+        bins, so this depthwise conv1d mixes the last ~6 REAL timesteps
+        of a shorter-than-`max_time` sequence with whatever sits in the
+        padded region right after it (`'same'` padding convolves right up
+        to the sequence boundary -- see `data/collate.py`).
+
+        THE PRECISE MECHANISM (verified directly, not assumed -- an
+        earlier version of this docstring stated the effect more
+        vaguely and turns out to have been importantly imprecise about
+        WHY it happens): `F.conv1d`'s own `padding=radius` argument
+        zero-fills the EDGE of whatever tensor it's given, so a trial
+        processed ALONE (tensor length == that trial's own length) and
+        the SAME trial's real-data region processed PADDED inside a
+        larger batch (`collate_trials`'s explicit zero-padding filling
+        the rest of the tensor) present IDENTICAL values (zero, either
+        way) to the convolution at the boundary -- **for a freshly
+        constructed model, the two cases are numerically indistinguishable,
+        confirmed to 1e-7 empirically.** The batch-dependence only
+        appears once `DayLayers` (which runs BEFORE this method, on
+        every timestep including the collate-padded ones -- `forward`
+        does not mask timesteps before smoothing, only before the GRU
+        when `input_lengths` is given) has been trained away from its
+        identity initialization: a nonzero learned BIAS turns the
+        collate-padding's zeros into `0 @ W + bias = bias` -- a nonzero
+        constant -- for every batched timestep past a trial's own length,
+        which is NOT what `F.conv1d`'s own implicit edge-padding would
+        have produced had that trial been processed alone. THAT
+        discrepancy (bias-contaminated padding vs. true zero-padding) is
+        the real, batch-composition-dependent effect, and it grows with
+        how far `DayLayers` has moved from identity, not with sigma or
+        radius directly. Quantified (both the near-zero untrained case
+        and the substantial trained-bias case) in
+        `tests/test_gru_ctc.py::test_smoothing_batch_composition_sensitivity_reports_magnitude`.
+        This is NOT fixed here (the smoothing is intentionally left
+        as-is, matching the published pipeline's fixed preprocessing
+        step); it is a documented, accepted limitation.
+
+        **If exact reproducibility of a specific trial's output matters**
+        (e.g. per-session evaluation where you want a trial's score to
+        not depend on incidental batch membership), use a FIXED batch
+        composition across runs, or `batch_size=1`, rather than relying
+        on this method to be batch-invariant -- it is not.
 
         Args:
             x: `(batch, time, n_features)` float32.
@@ -305,6 +447,11 @@ class GRUCTC(nn.Module):
         adjustment from being silently forgotten at whichever call site
         adds the downsampling later (`CLAUDE.md`'s "known pitfalls").
 
+        NOTE: unrelated to `forward`'s own `input_lengths` argument (which
+        controls `pack_padded_sequence`/`pad_packed_sequence` around the
+        GRU) other than sharing the same underlying tensor as their input
+        -- see the module docstring's note on this.
+
         Args:
             input_lengths: `(batch,)` int64, from `collate_trials`.
 
@@ -315,7 +462,12 @@ class GRUCTC(nn.Module):
         """
         return input_lengths
 
-    def forward(self, features: torch.Tensor, session_indices: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        features: torch.Tensor,
+        session_indices: torch.Tensor,
+        input_lengths: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Compute per-timestep log-class-probabilities.
 
         Args:
@@ -325,6 +477,34 @@ class GRUCTC(nn.Module):
                 `"session_indices"`. Read even when `use_day_layers=False`
                 (accepted for a uniform call signature) but unused in
                 that case.
+            input_lengths: `(batch,)` int64, optional. Each item's true
+                (unpadded) timestep count -- the SAME `collate_trials`
+                `"input_lengths"` tensor you separately route through
+                `ctc_input_lengths` before `nn.CTCLoss` (see this
+                argument's relationship to that one in the module
+                docstring; they are NOT the same adjustment). When given,
+                the GRU is run through `nn.utils.rnn.pack_padded_sequence`
+                / `pad_packed_sequence` (with `enforce_sorted=False`, so
+                callers need not pre-sort the batch by length, and
+                `total_length=features.size(1)` so the unpacked output's
+                time dimension still matches the input's `max_time`) so
+                padded timesteps never enter the recurrence. Passing this
+                ALSO SPEEDS UP TRAINING, since cuDNN's packed-sequence
+                path skips computation on padding entirely rather than
+                computing (and then discarding) outputs for it -- this is
+                a performance benefit even in cases where it isn't needed
+                for correctness. REQUIRED in practice whenever
+                `bidirectional=True` (enforced by refusing that
+                configuration in `__init__` instead, since `forward`
+                cannot itself force every call site to supply this);
+                optional for the unidirectional default, where a causal
+                GRU's real-timestep outputs never depend on the padded
+                region regardless (see the module docstring's
+                "WHY PADDING MASKING MATTERS MORE FOR BIDIRECTIONAL").
+                NOTE: this does NOT address `_smooth`'s SEPARATE,
+                documented batch-composition-dependence limitation --
+                packing only changes what the GRU sees, not the
+                depthwise-conv smoothing step that runs before it.
 
         Returns:
             `log_probs`: `(time, batch, n_classes)` float32 --
@@ -332,7 +512,24 @@ class GRUCTC(nn.Module):
             `log_softmax` has already been applied over the class
             (last) dimension exactly once; callers MUST NOT transpose
             this or apply `log_softmax` again (see the module docstring).
+
+        Raises:
+            ValueError: If `features.shape[-1] != self.n_features`,
+                naming both the expected and the received shape -- a
+                transposed or otherwise mis-shaped input would otherwise
+                proceed silently (e.g. a `(batch, 512, time)` tensor
+                passed by mistake produces no error, just wrong output).
         """
+        if features.shape[-1] != self.n_features:
+            raise ValueError(
+                f"GRUCTC.forward: expected features.shape[-1] == "
+                f"{self.n_features}, got {features.shape[-1]} "
+                f"(full shape: {tuple(features.shape)}). A transposed "
+                f"input (e.g. (batch, n_features, time) instead of "
+                f"(batch, time, n_features)) would otherwise proceed "
+                f"silently."
+            )
+
         x = features
 
         if self._input_dropout is not None:
@@ -345,13 +542,30 @@ class GRUCTC(nn.Module):
 
         x = self._smooth(x)
 
-        gru_out, _ = self.gru(x)  # (batch, time, hidden_size * n_directions)
+        if input_lengths is not None:
+            packed = nn.utils.rnn.pack_padded_sequence(
+                x, input_lengths.cpu(), batch_first=True, enforce_sorted=False,
+            )
+            packed_out, _ = self.gru(packed)
+            gru_out, _ = nn.utils.rnn.pad_packed_sequence(
+                packed_out, batch_first=True, total_length=x.size(1),
+            )
+        else:
+            gru_out, _ = self.gru(x)  # (batch, time, hidden_size * n_directions)
+
         logits = self.output(gru_out)  # (batch, time, n_classes)
         log_probs = F.log_softmax(logits, dim=-1)  # (batch, time, n_classes)
         return log_probs.transpose(0, 1)  # (time, batch, n_classes)
 
     def n_parameters(self) -> dict[str, int]:
-        """Count trainable parameters by component.
+        """Count ALL parameters by component, regardless of `requires_grad`.
+
+        NOTE: despite what an earlier version of this docstring implied,
+        this counts EVERY parameter unconditionally, including any a
+        caller has frozen. Use `n_trainable_parameters()` for a
+        `requires_grad`-filtered count -- see its docstring for an
+        important caveat about `DayLayers`' hook-based freezing not being
+        visible to `requires_grad` at all.
 
         Returns:
             A dict with keys `"day_layers"`, `"gru"`, `"output"`, and
@@ -368,6 +582,41 @@ class GRUCTC(nn.Module):
         )
         gru = sum(p.numel() for p in self.gru.parameters())
         output = sum(p.numel() for p in self.output.parameters())
+        return {
+            "day_layers": day_layers,
+            "gru": gru,
+            "output": output,
+            "total": day_layers + gru + output,
+        }
+
+    def n_trainable_parameters(self) -> dict[str, int]:
+        """Count parameters with `requires_grad=True`, by component.
+
+        CAVEAT: `DayLayers.freeze_all_except` does NOT set
+        `requires_grad=False` on the frozen slices -- it can't,
+        `requires_grad` is a per-TENSOR flag and a session's slice is
+        part of a larger shared tensor (`day_layers.py`'s module
+        docstring). It masks gradients via a hook instead. This method
+        therefore still reports the FULL `day_layers` parameter count as
+        "trainable" even while `freeze_all_except` is active for one
+        session -- it reflects `requires_grad` only, which is a real but
+        incomplete picture of what's actually receiving gradient updates
+        under `DayLayers`' freezing mechanism. There is no general way to
+        introspect "how many of this tensor's elements currently receive
+        nonzero gradient" from `requires_grad` alone.
+
+        Returns:
+            Same keys as `n_parameters()`, but each count includes only
+            parameters where `p.requires_grad` is True at the moment of
+            the call -- a snapshot, not a live-updating value.
+        """
+        day_layers = (
+            sum(p.numel() for p in self.day_layers.parameters() if p.requires_grad)
+            if self.day_layers is not None
+            else 0
+        )
+        gru = sum(p.numel() for p in self.gru.parameters() if p.requires_grad)
+        output = sum(p.numel() for p in self.output.parameters() if p.requires_grad)
         return {
             "day_layers": day_layers,
             "gru": gru,

@@ -24,7 +24,7 @@ def train_one_epoch(
 
     Args:
         model: The model being trained.
-        dataloader: Yields batches as produced by `collate_batch`.
+        dataloader: Yields batches as produced by `collate_trials`.
         optimizer: Optimizer for `model`'s parameters.
         criterion: Loss function (expected to be `nn.CTCLoss`).
         device: Device to run computation on.
@@ -45,7 +45,7 @@ def evaluate(
 
     Args:
         model: The model being evaluated.
-        dataloader: Yields batches as produced by `collate_batch`.
+        dataloader: Yields batches as produced by `collate_trials`.
         criterion: Loss function (expected to be `nn.CTCLoss`).
         device: Device to run computation on.
 
