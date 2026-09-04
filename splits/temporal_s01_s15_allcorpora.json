@@ -1,8 +1,8 @@
 {
   "name": "temporal_s01_s15_allcorpora",
   "created_by": "scripts/01_build_splits.py",
-  "created_at": "2026-09-03T21:25:04.982549+00:00",
-  "git_commit": "0d92ec4b84bcb09e5f9670257dbb35be5bc620d8",
+  "created_at": "2026-09-04T00:06:39.101048+00:00",
+  "git_commit": "2c8511c077cd0b9915ba1709a71409be2fcadcc1",
   "corpus_filter": null,
   "cut_session_index": 15,
   "cut_date": "2023-10-15",
@@ -55,6 +55,98 @@
     "t15.2025.03.30": 43,
     "t15.2025.04.13": 44
   },
+  "train_sessions": [
+    {
+      "session_id": "t15.2023.08.11",
+      "session_date": "2023-08-11",
+      "n_trials": 288,
+      "n_val_trials": 29
+    },
+    {
+      "session_id": "t15.2023.08.13",
+      "session_date": "2023-08-13",
+      "n_trials": 383,
+      "n_val_trials": 38
+    },
+    {
+      "session_id": "t15.2023.08.18",
+      "session_date": "2023-08-18",
+      "n_trials": 246,
+      "n_val_trials": 25
+    },
+    {
+      "session_id": "t15.2023.08.20",
+      "session_date": "2023-08-20",
+      "n_trials": 326,
+      "n_val_trials": 33
+    },
+    {
+      "session_id": "t15.2023.08.25",
+      "session_date": "2023-08-25",
+      "n_trials": 113,
+      "n_val_trials": 11
+    },
+    {
+      "session_id": "t15.2023.08.27",
+      "session_date": "2023-08-27",
+      "n_trials": 175,
+      "n_val_trials": 18
+    },
+    {
+      "session_id": "t15.2023.09.01",
+      "session_date": "2023-09-01",
+      "n_trials": 346,
+      "n_val_trials": 35
+    },
+    {
+      "session_id": "t15.2023.09.03",
+      "session_date": "2023-09-03",
+      "n_trials": 356,
+      "n_val_trials": 36
+    },
+    {
+      "session_id": "t15.2023.09.24",
+      "session_date": "2023-09-24",
+      "n_trials": 280,
+      "n_val_trials": 28
+    },
+    {
+      "session_id": "t15.2023.09.29",
+      "session_date": "2023-09-29",
+      "n_trials": 201,
+      "n_val_trials": 20
+    },
+    {
+      "session_id": "t15.2023.10.01",
+      "session_date": "2023-10-01",
+      "n_trials": 262,
+      "n_val_trials": 26
+    },
+    {
+      "session_id": "t15.2023.10.06",
+      "session_date": "2023-10-06",
+      "n_trials": 210,
+      "n_val_trials": 21
+    },
+    {
+      "session_id": "t15.2023.10.08",
+      "session_date": "2023-10-08",
+      "n_trials": 301,
+      "n_val_trials": 30
+    },
+    {
+      "session_id": "t15.2023.10.13",
+      "session_date": "2023-10-13",
+      "n_trials": 199,
+      "n_val_trials": 20
+    },
+    {
+      "session_id": "t15.2023.10.15",
+      "session_date": "2023-10-15",
+      "n_trials": 283,
+      "n_val_trials": 28
+    }
+  ],
   "train": [
     [
       "t15.2023.08.11",

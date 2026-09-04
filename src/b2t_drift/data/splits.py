@@ -44,6 +44,7 @@ import json
 import random
 import statistics
 import subprocess
+import warnings
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -76,9 +77,18 @@ def load_corpus_labels(csv_path: Path) -> dict[tuple[str, int], str]:
         `session_id` is derived from the CSV's `Date` column (`YYYY-MM-DD`
         -> `t15.YYYY.MM.DD`), not read from any HDF5 file.
     """
+    required_columns = ("Date", "Block number", "Corpus")
     labels: dict[tuple[str, int], str] = {}
     with Path(csv_path).open("r", newline="") as f:
         reader = csv.DictReader(f)
+        actual_columns = reader.fieldnames or []
+        missing = [c for c in required_columns if c not in actual_columns]
+        if missing:
+            raise ValueError(
+                f"load_corpus_labels: {csv_path} is missing expected "
+                f"column(s) {missing}. Expected: {list(required_columns)}. "
+                f"Actual: {list(actual_columns)}."
+            )
         for row in reader:
             session_id = "t15." + row["Date"].replace("-", ".")
             block_num = int(row["Block number"])
@@ -170,11 +180,29 @@ def build_temporal_split(
     ≥`min_eval_trials` threshold.
 
     The validation set is sampled from WITHIN the training sessions only,
-    stratified by session (each training session contributes
-    `round(val_fraction * that session's trial count)` trials, chosen by
-    `random.Random(seed).sample`) so no training session is entirely
-    absent from validation and no validation trial's session postdates
-    the cut.
+    stratified by session so no training session with at least 1 trial is
+    entirely absent from validation, and no validation trial's session
+    postdates the cut: each training session with `n >= 1` trials
+    contributes `max(1, round(val_fraction * n))` trials (capped at `n`),
+    chosen by `random.Random(seed).sample`. The `max(1, ...)` matters --
+    `round(val_fraction * n)` alone returns 0 for any session with fewer
+    than `1 / (2 * val_fraction)` trials (5 trials at the default
+    `val_fraction=0.1`), which would silently exclude small sessions from
+    validation entirely despite the "stratified by session" claim.
+
+    A TRAINING SESSION CAN LEGITIMATELY HAVE 0 TRIALS after corpus
+    filtering (e.g. `t15.2023.08.11`, the earliest session, is 100%
+    50-Word -- 0 of its 288 trials are Switchboard). This is NOT treated
+    as an error: the session contributes 0 trials to both `train` and
+    `val`, a `UserWarning` is emitted naming it, and it is recorded in the
+    returned `train_sessions` list with `n_trials: 0` -- an auditable fact
+    in the committed manifest, not a silent skip. (An earlier version of
+    this function raised `ValueError` here; that was wrong, because
+    `t15.2023.08.11` is the first session in every one of this project's
+    cut points, so it would have made every Switchboard-only manifest
+    unbuildable. `validate_split` still raises if the training block ends
+    up EMPTY, i.e. every training session had 0 trials -- see its
+    docstring.)
 
     Args:
         data_root: Directory containing per-session subdirectories.
@@ -198,21 +226,26 @@ def build_temporal_split(
         A dict matching the schema documented in `scripts/01_build_splits.py`
         / the project's manifest format: `name`, `created_by`, `created_at`,
         `git_commit`, `corpus_filter`, `cut_session_index`, `cut_date`,
-        `val_fraction`, `seed`, `session_to_index`, `train`, `val`,
-        `eval_sessions`. Trial references are `[session_id, partition,
-        trial_key]` lists (JSON-array-shaped, not tuples, so a
-        `write_split` -> `load_split` round trip compares equal).
-        `session_to_index` covers ALL sessions in `data_root` (not just
-        ones with trials surviving this split's corpus filter), assigned
-        by date order -- the same mapping regardless of `corpus_filter` or
-        `cut_session_index`, so session indices are stable across every
-        manifest this function produces (needed for the Week 3
-        day-specific input layers to refer to "the same" session
-        consistently across cut points).
+        `val_fraction`, `seed`, `session_to_index`, `train_sessions`,
+        `train`, `val`, `eval_sessions`. Trial references are
+        `[session_id, partition, trial_key]` lists (JSON-array-shaped, not
+        tuples, so a `write_split` -> `load_split` round trip compares
+        equal). `train_sessions` is a list of `{session_id, session_date,
+        n_trials, n_val_trials}` dicts, one per training-block session in
+        date order, with counts AFTER corpus filtering -- this is what
+        makes a 0-trial training session (see above) an explicit,
+        auditable entry rather than an absence someone has to notice on
+        their own. `session_to_index` covers ALL sessions in `data_root`
+        (not just ones with trials surviving this split's corpus filter),
+        assigned by date order -- the same mapping regardless of
+        `corpus_filter` or `cut_session_index`, so session indices are
+        stable across every manifest this function produces (needed for
+        the Week 3 day-specific input layers to refer to "the same"
+        session consistently across cut points).
 
     Raises:
         ValueError: If `cut_session_index` is out of range for the number
-            of discovered sessions, or (via `_trials_for_session`) if
+            of discovered sessions, or if (via `_trials_for_session`)
             `corpus_filter` is given and some block has no corpus label.
     """
     sessions = discover_sessions(data_root)
@@ -227,20 +260,39 @@ def build_temporal_split(
 
     corpus_labels = load_corpus_labels(corpus_csv) if corpus_filter is not None else None
 
-    train_sessions = sessions[:cut_session_index]
+    train_session_files = sessions[:cut_session_index]
     eval_sessions_meta = sessions[cut_session_index:]
-    cut_date = train_sessions[-1].session_date
+    cut_date = train_session_files[-1].session_date
 
     rng = random.Random(seed)
     train_refs: list[list[str]] = []
     val_refs: list[list[str]] = []
-    for session in train_sessions:
+    train_sessions: list[dict[str, Any]] = []
+    for session in train_session_files:
         trials = _trials_for_session(data_root, session.session_id, corpus_labels, corpus_filter)
-        n_val = round(val_fraction * len(trials))
-        val_indices = set(rng.sample(range(len(trials)), n_val)) if n_val else set()
+        n_trials = len(trials)
+        if n_trials == 0:
+            n_val = 0
+            warnings.warn(
+                f"build_temporal_split: training session {session.session_id!r} "
+                f"has 0 trials after corpus filtering (corpus_filter="
+                f"{corpus_filter!r}) -- it contributes nothing to training. "
+                f"Recorded in the manifest's train_sessions list with "
+                f"n_trials=0, not silently dropped.",
+                stacklevel=2,
+            )
+        else:
+            n_val = min(n_trials, max(1, round(val_fraction * n_trials)))
+        val_indices = set(rng.sample(range(n_trials), n_val)) if n_val else set()
         for i, trial_id in enumerate(trials):
             ref = [trial_id.session_id, trial_id.partition, trial_id.trial_key]
             (val_refs if i in val_indices else train_refs).append(ref)
+        train_sessions.append({
+            "session_id": session.session_id,
+            "session_date": session.session_date.isoformat(),
+            "n_trials": n_trials,
+            "n_val_trials": n_val,
+        })
 
     eval_sessions: list[dict[str, Any]] = []
     for session in eval_sessions_meta:
@@ -270,6 +322,7 @@ def build_temporal_split(
         "val_fraction": val_fraction,
         "seed": seed,
         "session_to_index": session_to_index,
+        "train_sessions": train_sessions,
         "train": train_refs,
         "val": val_refs,
         "eval_sessions": eval_sessions,
@@ -320,6 +373,40 @@ def _eval_session_trials(split_dict: dict[str, Any], session_id: str) -> list[li
     )
 
 
+def _resolve_trial_ids(
+    refs: list[list[str]],
+    data_root: Path,
+) -> dict[tuple[str, str, str], TrialId]:
+    """Look up full `TrialId`s for a list of trial references.
+
+    Shared by `split_to_trial_ids` and `validate_split`'s (opt-in) corpus
+    consistency check. Reads each distinct `(session_id, partition)` file's
+    attributes exactly once via `iter_trial_ids`, regardless of how many
+    of `refs` come from it.
+
+    Args:
+        refs: `[session_id, partition, trial_key]` references.
+        data_root: Directory containing per-session subdirectories.
+
+    Returns:
+        A dict from `(session_id, partition, trial_key)` to the matching
+        `TrialId`, for every reference that was found. References not
+        found in `data_root` are simply absent from the result -- callers
+        that need to treat that as an error check for missing keys
+        themselves (see `split_to_trial_ids`).
+    """
+    needed_keys: dict[tuple[str, str], set[str]] = {}
+    for session_id, part, trial_key in refs:
+        needed_keys.setdefault((session_id, part), set()).add(trial_key)
+
+    lookup: dict[tuple[str, str, str], TrialId] = {}
+    for (session_id, part), wanted in needed_keys.items():
+        for trial_id in iter_trial_ids(data_root, session_id, partitions=(part,)):
+            if trial_id.trial_key in wanted:
+                lookup[(session_id, part, trial_id.trial_key)] = trial_id
+    return lookup
+
+
 def split_to_trial_ids(
     split_dict: dict[str, Any],
     data_root: Path,
@@ -331,7 +418,8 @@ def split_to_trial_ids(
     (`docs/DESIGN.md` / the manifest schema) -- everything else
     (`n_time_steps`, `seq_len`, `sentence_label`, ...) is re-read from the
     HDF5 attributes here, once per distinct `(session_id, partition)` file
-    touched (via `iter_trial_ids`), rather than duplicated into the JSON.
+    touched (via `_resolve_trial_ids` / `iter_trial_ids`), rather than
+    duplicated into the JSON.
 
     Args:
         split_dict: A manifest, as returned by `build_temporal_split` or
@@ -358,15 +446,7 @@ def split_to_trial_ids(
     else:
         refs = _eval_session_trials(split_dict, partition)
 
-    needed_keys: dict[tuple[str, str], set[str]] = {}
-    for session_id, part, trial_key in refs:
-        needed_keys.setdefault((session_id, part), set()).add(trial_key)
-
-    lookup: dict[tuple[str, str, str], TrialId] = {}
-    for (session_id, part), wanted in needed_keys.items():
-        for trial_id in iter_trial_ids(data_root, session_id, partitions=(part,)):
-            if trial_id.trial_key in wanted:
-                lookup[(session_id, part, trial_id.trial_key)] = trial_id
+    lookup = _resolve_trial_ids(refs, data_root)
 
     result = []
     for session_id, part, trial_key in refs:
@@ -381,7 +461,12 @@ def split_to_trial_ids(
     return result
 
 
-def validate_split(split_dict: dict[str, Any]) -> None:
+def validate_split(
+    split_dict: dict[str, Any],
+    corpus_labels: dict[tuple[str, int], str] | None = None,
+    data_root: Path | None = None,
+    allow_empty_eval_sessions: bool = False,
+) -> None:
     """Aggressively check a manifest for temporal or structural leakage.
 
     Recomputes every property from the manifest's raw trial references and
@@ -392,11 +477,39 @@ def validate_split(split_dict: dict[str, Any]) -> None:
     Args:
         split_dict: A manifest, as returned by `build_temporal_split` or
             `load_split`.
+        corpus_labels: Result of `load_corpus_labels`. If given (and
+            `split_dict["corpus_filter"]` is not None), additionally
+            checks that EVERY trial reference in train, val, and every
+            eval session actually belongs to that corpus. This check
+            reads HDF5 attributes (to resolve each reference's
+            `block_num`, which trial references don't carry -- see
+            `_resolve_trial_ids`) and is therefore much slower than every
+            other check here, which is why it's opt-in rather than
+            always-on: `data_root` must also be given when `corpus_labels`
+            is, since resolving `block_num` requires reading the actual
+            files.
+        data_root: Directory containing per-session subdirectories.
+            Required if `corpus_labels` is given; ignored otherwise.
+        allow_empty_eval_sessions: If False (the default), an eval session
+            with `n_trials == 0` raises. Such a session is a LEGITIMATE
+            outcome under corpus filtering (a held-out session can
+            genuinely contain zero trials of the target corpus), and the
+            manifest is designed to keep it as a flagged entry rather than
+            drop it (`passes_threshold: false` -- `docs/DESIGN.md`,
+            corpus stratification decision). But whether that's
+            acceptable for a given use of the manifest is a decision, not
+            a default: the strict default forces it to be made
+            explicitly, by passing `allow_empty_eval_sessions=True`,
+            rather than silently proceeding with a curve point that has
+            nothing behind it.
 
     Raises:
         ValueError: On the first of the following that fails, naming the
             specific offending session or trial rather than just stating
             that a problem was found:
+              - `train`, `val`, or `eval_sessions` is empty
+              - an eval session has `n_trials == 0` (unless
+                `allow_empty_eval_sessions=True`)
               - a session appears in both train/val and `eval_sessions`
               - any eval session's date is on or before `cut_date`
               - any training/val session's date is after `cut_date`
@@ -407,12 +520,31 @@ def validate_split(split_dict: dict[str, Any]) -> None:
               - `session_to_index`'s values are not contiguous from 0
               - an eval session's `days_since_cut` does not equal
                 `session_date - cut_date`
+              - (only when `corpus_labels` is given) a trial reference
+                does not belong to `split_dict["corpus_filter"]`
     """
     cut_date = date.fromisoformat(split_dict["cut_date"])
     train_refs = split_dict["train"]
     val_refs = split_dict["val"]
     eval_sessions = split_dict["eval_sessions"]
     session_to_index = split_dict["session_to_index"]
+
+    if not train_refs:
+        raise ValueError("validate_split: train is empty.")
+    if not val_refs:
+        raise ValueError("validate_split: val is empty.")
+    if not eval_sessions:
+        raise ValueError("validate_split: eval_sessions is empty.")
+
+    if not allow_empty_eval_sessions:
+        for e in eval_sessions:
+            if e["n_trials"] == 0:
+                raise ValueError(
+                    f"validate_split: eval session {e['session_id']!r} has "
+                    f"n_trials=0. This can be a legitimate outcome under "
+                    f"corpus filtering, but must be explicitly accepted -- "
+                    f"pass allow_empty_eval_sessions=True if so."
+                )
 
     train_val_session_ids = {ref[0] for ref in train_refs} | {ref[0] for ref in val_refs}
     eval_session_ids = {e["session_id"] for e in eval_sessions}
@@ -481,3 +613,35 @@ def validate_split(split_dict: dict[str, Any]) -> None:
             f"validate_split: session_to_index values are not contiguous "
             f"from 0: {index_values}."
         )
+
+    if corpus_labels is not None:
+        if data_root is None:
+            raise ValueError(
+                "validate_split: data_root is required when corpus_labels "
+                "is given -- the corpus consistency check resolves each "
+                "trial reference's block_num by reading HDF5 attributes."
+            )
+        expected_corpus = split_dict["corpus_filter"]
+        if expected_corpus is not None:
+            tagged_refs: list[tuple[str, list[str]]] = [("train", r) for r in train_refs]
+            tagged_refs += [("val", r) for r in val_refs]
+            for e in eval_sessions:
+                tagged_refs += [(f"eval:{e['session_id']}", r) for r in e["trials"]]
+
+            lookup = _resolve_trial_ids([r for _, r in tagged_refs], data_root)
+            for group_name, ref in tagged_refs:
+                key = tuple(ref)
+                trial_id = lookup.get(key)
+                if trial_id is None:
+                    raise ValueError(
+                        f"validate_split: trial reference {ref} (in "
+                        f"{group_name}) was not found under {data_root}."
+                    )
+                actual_corpus = corpus_labels.get((trial_id.session_id, trial_id.block_num))
+                if actual_corpus != expected_corpus:
+                    raise ValueError(
+                        f"validate_split: trial reference {ref} (in "
+                        f"{group_name}) belongs to corpus "
+                        f"{actual_corpus!r}, expected {expected_corpus!r} "
+                        f"(split_dict['corpus_filter'])."
+                    )

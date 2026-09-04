@@ -19,7 +19,12 @@ import argparse
 from pathlib import Path
 
 from b2t_drift.config import load_yaml
-from b2t_drift.data.splits import build_temporal_split, validate_split, write_split
+from b2t_drift.data.splits import (
+    build_temporal_split,
+    load_corpus_labels,
+    validate_split,
+    write_split,
+)
 
 DEFAULT_CONFIG_PATH = Path("configs/data/t15.yaml")
 
@@ -47,13 +52,21 @@ def main() -> None:
     data_root = Path(config["raw_data_dir"])
     corpus_csv = Path(config["corpus_csv_path"])
     splits_dir = Path(config["splits_dir"])
+    corpus_labels = load_corpus_labels(corpus_csv)
 
     rows = []
     for cut_session_index, corpus_filter in MANIFEST_SPECS:
         split = build_temporal_split(
             data_root, corpus_csv, cut_session_index, corpus_filter=corpus_filter,
         )
-        validate_split(split)
+        # allow_empty_eval_sessions=True: a zero-trial eval session under
+        # corpus filtering is the already-established, deliberate design
+        # (docs/DESIGN.md, corpus stratification decision) -- such
+        # sessions are kept in the manifest as flagged (passes_threshold:
+        # false) entries, not dropped, so their absence of Switchboard
+        # data stays auditable rather than silently disappearing.
+        validate_split(split, corpus_labels=corpus_labels, data_root=data_root,
+                        allow_empty_eval_sessions=True)
         write_split(split, splits_dir / f"{split['name']}.json")
 
         n_passing = sum(1 for e in split["eval_sessions"] if e["passes_threshold"])

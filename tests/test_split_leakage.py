@@ -7,6 +7,7 @@ data/raw/hdf5_data_final is not present.
 from __future__ import annotations
 
 import copy
+import re
 from datetime import date
 from pathlib import Path
 
@@ -113,10 +114,53 @@ def test_switchboard_filter_matches_corpus_csv(sb_split) -> None:
         assert corpus_labels[(trial_id.session_id, trial_id.block_num)] == "Switchboard"
 
 
+def test_train_sessions_present_in_date_order_with_zero_trial_session_recorded(sb_split) -> None:
+    train_sessions = sb_split["train_sessions"]
+    assert len(train_sessions) == sb_split["cut_session_index"]
+
+    dates = [date.fromisoformat(s["session_date"]) for s in train_sessions]
+    assert dates == sorted(dates)
+
+    first = train_sessions[0]
+    assert first["session_id"] == "t15.2023.08.11"
+    assert first["n_trials"] == 0
+    assert first["n_val_trials"] == 0
+
+
+def test_t15_2023_08_11_has_zero_trials_in_every_switchboard_cut_point() -> None:
+    for cut in (5, 10, 15, 20):
+        split = build_temporal_split(DATA_ROOT, CORPUS_CSV, cut_session_index=cut, corpus_filter="Switchboard")
+        first = split["train_sessions"][0]
+        assert first["session_id"] == "t15.2023.08.11"
+        assert first["n_trials"] == 0
+
+
+def test_small_training_session_still_gets_at_least_one_val_trial() -> None:
+    """Uses an artificially tiny val_fraction against real (non-tiny)
+    sessions so that round(val_fraction * n) == 0 for every session,
+    directly exercising the max(1, ...) fix at the exact boundary it's
+    meant to cover -- no session in the real data is naturally small
+    enough on its own to trigger this without shrinking val_fraction."""
+    split = build_temporal_split(
+        DATA_ROOT, CORPUS_CSV, cut_session_index=15, corpus_filter="Switchboard", val_fraction=0.001,
+    )
+    val_sessions = {r[0] for r in split["val"]}
+    for session in split["train_sessions"]:
+        if session["n_trials"] > 0:
+            assert session["n_val_trials"] == 1, session
+            assert session["session_id"] in val_sessions, (
+                f"{session['session_id']} has {session['n_trials']} trials "
+                f"but does not appear in val"
+            )
+
+
 def test_validate_split_raises_on_session_moved_into_eval(sb_split) -> None:
     corrupted = copy.deepcopy(sb_split)
     # Move one training session's trials into a fabricated eval entry.
-    moved_session_id = corrupted["train"][0][0]
+    # Pick a session with n_trials > 0 so the moved entry itself doesn't
+    # trip the (separately-tested) zero-trials check instead of the
+    # overlap check this test targets.
+    moved_session_id = next(s["session_id"] for s in corrupted["train_sessions"] if s["n_trials"] > 0)
     moved_trials = [r for r in corrupted["train"] if r[0] == moved_session_id]
     corrupted["train"] = [r for r in corrupted["train"] if r[0] != moved_session_id]
     corrupted["eval_sessions"].append({
@@ -129,16 +173,23 @@ def test_validate_split_raises_on_session_moved_into_eval(sb_split) -> None:
         "trials": moved_trials,
     })
 
-    with pytest.raises(ValueError):
-        validate_split(corrupted)
+    # allow_empty_eval_sessions=True: sb_split already legitimately
+    # contains real zero-trial eval sessions (see the emptiness-check
+    # tests below) -- without this flag validate_split would raise on
+    # one of THOSE first, which would make this test pass without
+    # actually exercising the overlap check it's meant to test.
+    with pytest.raises(ValueError, match=re.escape(moved_session_id)):
+        validate_split(corrupted, allow_empty_eval_sessions=True)
 
 
 def test_validate_split_raises_when_eval_session_precedes_cut_date(sb_split) -> None:
     corrupted = copy.deepcopy(sb_split)
-    corrupted["eval_sessions"][0]["session_date"] = corrupted["cut_date"]  # == cut_date, not after
+    # Pick an eval session with n_trials > 0 for the same reason as above.
+    target = next(e for e in corrupted["eval_sessions"] if e["n_trials"] > 0)
+    target["session_date"] = corrupted["cut_date"]  # == cut_date, not after
 
-    with pytest.raises(ValueError):
-        validate_split(corrupted)
+    with pytest.raises(ValueError, match=re.escape(target["session_id"])):
+        validate_split(corrupted, allow_empty_eval_sessions=True)
 
 
 def test_write_then_load_split_round_trips(sb_split, tmp_path) -> None:
@@ -156,9 +207,17 @@ def test_split_to_trial_ids_session_ids_match_manifest(sb_split) -> None:
 
 
 def test_all_four_switchboard_cut_points_validate_cleanly() -> None:
+    corpus_labels = load_corpus_labels(CORPUS_CSV)
     for cut in (5, 10, 15, 20):
         split = build_temporal_split(DATA_ROOT, CORPUS_CSV, cut_session_index=cut, corpus_filter="Switchboard")
-        validate_split(split)  # must not raise
+        # allow_empty_eval_sessions=True: real Switchboard eval sessions
+        # legitimately include some with n_trials==0 (docs/DESIGN.md
+        # corpus stratification decision) -- this is the same flag used
+        # at build time in scripts/01_build_splits.py, not a relaxation
+        # specific to this test.
+        validate_split(
+            split, corpus_labels=corpus_labels, data_root=DATA_ROOT, allow_empty_eval_sessions=True,
+        )  # must not raise
 
 
 def test_later_cut_points_have_more_train_trials_and_fewer_eval_sessions() -> None:
@@ -170,3 +229,127 @@ def test_later_cut_points_have_more_train_trials_and_fewer_eval_sessions() -> No
     for earlier, later in zip(cuts, cuts[1:]):
         assert len(splits[later]["train"]) > len(splits[earlier]["train"])
         assert len(splits[later]["eval_sessions"]) < len(splits[earlier]["eval_sessions"])
+
+
+# --- (b) corpus consistency check ------------------------------------------
+
+
+def test_validate_split_accepts_clean_switchboard_split_with_corpus_labels(sb_split) -> None:
+    corpus_labels = load_corpus_labels(CORPUS_CSV)
+    validate_split(
+        sb_split, corpus_labels=corpus_labels, data_root=DATA_ROOT, allow_empty_eval_sessions=True,
+    )  # must not raise
+
+
+def test_validate_split_raises_when_data_root_missing_but_corpus_labels_given(sb_split) -> None:
+    corpus_labels = load_corpus_labels(CORPUS_CSV)
+    with pytest.raises(ValueError, match="data_root"):
+        validate_split(sb_split, corpus_labels=corpus_labels, allow_empty_eval_sessions=True)
+
+
+def test_validate_split_raises_on_wrong_corpus_trial_injected_into_train(sb_split) -> None:
+    corpus_labels = load_corpus_labels(CORPUS_CSV)
+    corrupted = copy.deepcopy(sb_split)
+
+    # t15.2023.08.11 is 100% 50-Word (see the zero-trials tests above), so
+    # any of its trials belong to a different corpus than sb_split's
+    # "Switchboard" filter. Borrow one from its val partition (itself a
+    # 50-Word-filtered split, cut_session_index=1 keeps only session 1 as
+    # train) to inject a genuinely wrong-corpus reference.
+    contaminant_split = build_temporal_split(DATA_ROOT, CORPUS_CSV, cut_session_index=1, corpus_filter="50-Word")
+    assert contaminant_split["train"], "expected t15.2023.08.11 to have 50-Word trials"
+    contaminant = contaminant_split["train"][0]
+
+    corrupted["train"].append(contaminant)
+
+    # Without corpus_labels the check doesn't run at all -- it's opt-in.
+    validate_split(corrupted, allow_empty_eval_sessions=True)  # must not raise
+
+    # With corpus_labels supplied, the contaminant is caught.
+    with pytest.raises(ValueError, match=re.escape(contaminant[0])):
+        validate_split(
+            corrupted, corpus_labels=corpus_labels, data_root=DATA_ROOT, allow_empty_eval_sessions=True,
+        )
+
+
+def test_validate_split_raises_on_wrong_corpus_trial_injected_into_eval(sb_split) -> None:
+    corpus_labels = load_corpus_labels(CORPUS_CSV)
+    corrupted = copy.deepcopy(sb_split)
+
+    contaminant_split = build_temporal_split(DATA_ROOT, CORPUS_CSV, cut_session_index=1, corpus_filter="50-Word")
+    contaminant = contaminant_split["train"][0]
+
+    target = next(e for e in corrupted["eval_sessions"] if e["n_trials"] > 0)
+    target["trials"].append(contaminant)
+    target["n_trials"] += 1
+
+    with pytest.raises(ValueError, match=re.escape(contaminant[0])):
+        validate_split(
+            corrupted, corpus_labels=corpus_labels, data_root=DATA_ROOT, allow_empty_eval_sessions=True,
+        )
+
+
+# --- (c) emptiness checks ---------------------------------------------------
+
+
+def test_validate_split_raises_on_empty_train(sb_split) -> None:
+    corrupted = copy.deepcopy(sb_split)
+    corrupted["train"] = []
+    with pytest.raises(ValueError, match="train is empty"):
+        validate_split(corrupted, allow_empty_eval_sessions=True)
+
+
+def test_validate_split_raises_on_empty_val(sb_split) -> None:
+    corrupted = copy.deepcopy(sb_split)
+    corrupted["val"] = []
+    with pytest.raises(ValueError, match="val is empty"):
+        validate_split(corrupted, allow_empty_eval_sessions=True)
+
+
+def test_validate_split_raises_on_empty_eval_sessions(sb_split) -> None:
+    corrupted = copy.deepcopy(sb_split)
+    corrupted["eval_sessions"] = []
+    with pytest.raises(ValueError, match="eval_sessions is empty"):
+        validate_split(corrupted, allow_empty_eval_sessions=True)
+
+
+def test_validate_split_raises_by_default_on_zero_trial_eval_session(sb_split) -> None:
+    # sb_split legitimately contains real zero-trial eval sessions under
+    # corpus filtering (docs/DESIGN.md, corpus stratification decision) --
+    # this test exercises that exact, already-present condition rather
+    # than fabricating one.
+    zero_trial_sessions = [e for e in sb_split["eval_sessions"] if e["n_trials"] == 0]
+    assert zero_trial_sessions, "expected sb_split to contain a real zero-trial eval session"
+
+    with pytest.raises(ValueError, match=re.escape(zero_trial_sessions[0]["session_id"])):
+        validate_split(sb_split)  # allow_empty_eval_sessions defaults to False
+
+
+def test_validate_split_allows_zero_trial_eval_session_when_opted_in(sb_split) -> None:
+    validate_split(sb_split, allow_empty_eval_sessions=True)  # must not raise
+
+
+# --- (d) CSV column validation ----------------------------------------------
+
+
+def test_load_corpus_labels_raises_on_missing_column(tmp_path) -> None:
+    bad_csv = tmp_path / "bad_corpus.csv"
+    # "Corpus" renamed to "CorpusType" -- a plausible real-world header
+    # drift, not a wildly malformed file.
+    bad_csv.write_text("Date,Block number,CorpusType\n2023-08-11,1,50-Word\n")
+
+    with pytest.raises(ValueError, match="Corpus") as exc_info:
+        load_corpus_labels(bad_csv)
+    message = str(exc_info.value)
+    assert "Date" in message
+    assert "Block number" in message
+    assert "CorpusType" in message  # actual columns are named in the error too
+
+
+def test_load_corpus_labels_accepts_well_formed_csv(tmp_path) -> None:
+    good_csv = tmp_path / "good_corpus.csv"
+    good_csv.write_text("Date,Block number,Corpus\n2023-08-11,1,50-Word\n2023-08-11,2,Switchboard\n")
+
+    labels = load_corpus_labels(good_csv)
+    assert labels[("t15.2023.08.11", 1)] == "50-Word"
+    assert labels[("t15.2023.08.11", 2)] == "Switchboard"

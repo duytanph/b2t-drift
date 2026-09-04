@@ -362,13 +362,26 @@ removes that confound while preserving the full day-offset range and,
 critically, all six of the 2025 sessions.
 
 **The cost, measured exactly from the generated manifests
-(2026-09-04):** the 1–15 cut has **3,501 Switchboard trials** (3,150
+(2026-09-03):** the 1–15 cut has **3,501 Switchboard trials** (3,150
 train + 351 val) versus **3,969 all-corpora** (3,571 + 398) — Switchboard-
-only trains on **~11.8% less data** at that cut point. (Framed elsewhere
-as "about 13%"; the precise, manifest-verified figure is closer to 12%
--- use this number, computed directly from `splits/temporal_s01_s15_switchboard.json`
-and `splits/temporal_s01_s15_allcorpora.json`, not the rounder estimate.)
-This is the tradeoff the all-corpora fallback exists to hedge against.
+only trains on **11.8% less data** at that cut point (computed directly
+from `splits/temporal_s01_s15_switchboard.json` and
+`splits/temporal_s01_s15_allcorpora.json`; corrects an earlier "~13%"
+estimate — see the curve coverage entry in section 12 for the full
+sweep-build measurement this figure is drawn from). This is the tradeoff
+the all-corpora fallback exists to hedge against.
+
+**The Switchboard 1–15 training block is effectively 14 sessions, not
+15.** Session 1 (`t15.2023.08.11`) is 100% 50-Word — 0 of its 288 trials
+survive the Switchboard filter — so it contributes nothing to Switchboard
+training despite being counted in "sessions 1–15." This is recorded per-
+session, with trial counts after corpus filtering, in every Switchboard
+manifest's `train_sessions` field (`src/b2t_drift/data/splits.py`,
+`build_temporal_split`); a zero there is an auditable fact, not a silent
+gap. **The cut DATE (2023-10-15) is unchanged** — it is set by the 15th
+session's calendar date regardless of how many of those sessions actually
+contribute Switchboard trials — so the drift curve's x-axis origin is
+unaffected by this.
 
 **The ≥50-labeled-Switchboard-trial viability threshold was fixed in
 advance of seeing any PER values** (during the Task 2 feasibility check,
@@ -998,3 +1011,85 @@ the date range).
     roughly 1.5x. **Use the exact route, not the Poisson figure, for any
     Week 2 firing-rate analysis** — see `docs/DATASET.md` section 9,
     item 9 for the full method and justification.
+
+### Curve coverage — cut-point sweep manifests, measured (2026-09-03)
+
+All five split manifests (`scripts/01_build_splits.py`,
+`src/b2t_drift/data/splits.py`) were built and validated against the real
+data. Exact numbers, read directly from the written manifests:
+
+| cut     | cut date   | train | val | eval sessions | passing | offset range |
+|---------|------------|------:|----:|---------------:|--------:|---------------|
+| s01–s05 | 2023-08-25 |   908 | 101 |             40 |      27 | +2 to +597    |
+| s01–s10 | 2023-09-29 | 2,098 | 235 |             35 |      22 | +2 to +562    |
+| s01–s15 | 2023-10-15 | 3,150 | 351 |             30 |      17 | +5 to +546    |
+| s01–s20 | 2023-11-17 | 3,336 | 371 |             25 |      15 | +100 to +513  |
+| s15 all corpora | 2023-10-15 | 3,571 | 398 | 30 |      30 | +5 to +546    |
+
+("train"/"val" are trial counts; "passing" is the count of eval sessions
+with `passes_threshold: true`, i.e. ≥50 trials; "offset range" spans only
+those passing sessions.)
+
+**THE s15 GAP.** The 17 passing day-offsets for the primary `s01–s15`
+Switchboard cut are exactly: `5, 7, 133, 145, 152, 154, 208, 243, 278,
+280, 287, 453, 455, 516, 518, 532, 546`. There is **no coverage between
++7 and +133 days** — a 126-day hole. This falls in the "frequent words"
+corpus era, whose sessions don't clear the 50-Switchboard-trial threshold
+at this cut. This is recorded as a **limitation of the measurement** (the
+curve simply has no data point in that window) — not a design flaw to be
+engineered around by, say, lowering the threshold or switching corpora
+mid-curve, either of which would trade a known gap for an unknown bias.
+
+**THE s20 CUT IS POOR VALUE.** Going from s15 to s20 buys only 186 more
+training trials (3,150 → 3,336, a 5.9% increase) while losing 5 eval
+sessions (30 → 25 total, 17 → 15 passing) and **both** early time points
+(+5 to +546 shrinks to +100 to +513 — the +5, +7, and +133-to-+287 region
+is gone entirely). It is retained in the sweep only as a boundary case
+for how far the cut can be pushed before the shrinking time axis clearly
+costs more than the larger training set buys (section 7, "Cut-point
+sweep, not a single fixed cut") — **not as a primary-analysis candidate**
+in its own right.
+
+**THE TRADEOFF IS THE POINT.** s01–s05 (908 train trials, 27 passing
+eval sessions spanning +2 to +597 days) versus s01–s15 (3,150 train
+trials — 3.5x more — but only 17 passing eval sessions and the 126-day
+hole above) is the cut-point sweep's central tradeoff made concrete: more
+calibration data against a shorter, gappier time axis. Surfacing this
+tradeoff explicitly is an **intended result** of sweeping the cut point
+at all (section 7) — it is not an obstacle the sweep failed to avoid.
+
+**CORPUS RESTRICTION COST, corrected.** 3,969 (all-corpora) → 3,501
+(Switchboard) at the s15 cut is **11.8%** less training data, not the
+~13% previously estimated in earlier drafts of this document — see the
+corpus stratification decision above (section 7) for the full
+computation and its provenance; both mentions of this figure in this
+document now agree.
+
+### Pre-committed decision rule for primary cut-point selection (2026-09-03)
+
+Recorded here, before any PER has been computed on any of the five
+manifests above, so that the primary cut point is chosen by a rule fixed
+in advance rather than by looking at results and picking whichever cut
+looks best after the fact:
+
+> The primary cut point will be selected as follows: use the largest cut
+> point whose baseline validation PER is acceptable, preferring earlier
+> cut points when PER is comparable (within 2 absolute percentage
+> points), on the grounds that earlier cuts give better curve resolution.
+> If no cut point yields a usable decoder under Switchboard-only
+> training, fall back to `temporal_s01_s15_allcorpora` and report the
+> corpus confound as a stated limitation rather than restricting
+> evaluation. This rule was fixed before any PER was computed.
+
+**Why recording this in advance matters.** A rule chosen after seeing the
+PER curves could always be rationalized to justify whichever cut point
+happens to produce the most favorable-looking result — "largest cut with
+acceptable PER, ties to the earlier cut" sounds principled regardless of
+which cut it ends up picking, which is exactly what makes a *post-hoc*
+version of it untrustworthy. Committing to the specific rule, the
+specific tolerance (2 points), and the specific fallback (all-corpora,
+not a different Switchboard cut, and not a lowered threshold) in this
+document, on this date, before any training run has produced a PER
+number, is what makes the eventual selection a principled decision rather
+than a post-hoc one — the distinction is entirely about *when* the rule
+was written down, not about whether the rule sounds reasonable.
