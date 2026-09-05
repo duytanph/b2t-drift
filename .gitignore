@@ -13,6 +13,12 @@ __pycache__/
 *.hdf5
 *.pkl
 
+# MLflow's local file store (file:./mlruns, training/logging.py). Bakes
+# absolute artifact paths into its own metadata once created -- never
+# committed, and needs the same not-just-copied treatment as .venv if the
+# repo ever moves again (docs/DESIGN.md section 14).
+mlruns/
+
 # Throwaway investigation scripts
 scratch/
 

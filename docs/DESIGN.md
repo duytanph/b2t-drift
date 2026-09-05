@@ -1344,3 +1344,167 @@ below the `1e-5` threshold
 **PER is now provably independent of batch composition**: a trial's
 decoded sequence, and therefore its contribution to PER, no longer
 depends on which other trials happened to share its evaluation batch.
+
+---
+
+## 14. Migration: H: (HDD) -> D: (SSD), and corrected dataloader numbers (2026-09-04)
+
+**The move.** Repo relocated from `H:\dev\bci_speech_decoding\b2t-drift`
+(spinning HDD) to `D:\dev\b2t-drift` (SATA SSD), via `scratch/migrate.ps1`
+(gitignored, one-off). **Reason:** section 8's full-scale dataloader
+measurement found 74% of every steady-state training epoch was spent
+waiting on the dataloader at `num_workers=2`, attributed to seek latency
+on scattered small HDF5 reads across the 45-session, per-session-file
+layout — a spinning-disk-specific cost, not a fundamental property of the
+data pipeline. Post-move verification: `git rev-parse HEAD` unchanged
+(`956fc97...`), `git status --short` shows only the pre-existing
+`?? sessions.txt`, `uv run pytest` reproduces the pre-move 179-passed
+baseline exactly (only with `uv sync --extra tensorboard` — see the
+caveat below), all 45 session folders and both `data/external/` files
+present, `00_verify_data.py` reproduces the exact pre-move trial counts
+(10,948 total: 8,072/1,426/1,450), and a spot-read of one HDF5 trial's
+`input_features` came back full shape, correct dtype, no NaNs. Zero
+stale `H:\`/`bci_speech_decoding`/`My Drive` references anywhere in
+tracked project files (only two expected non-issues elsewhere: a
+coincidental `"H:\n"` print in a third-party `.venv` test file, and
+`scratch/migrate.ps1` itself plus a stale pre-move log, both gitignored
+and intentionally referencing the old path for operational history).
+
+**Caveat found during rebuild, not a migration defect.** Plain `uv sync`
+installs 177 passed / 1 failed / 1 skipped, not 179 passed — the failure
+(`test_provenance.py::test_capture_provenance_tensorboard_version_present_when_installed`)
+and the skip (`test_logging.py`) both require the optional `tensorboard`
+extra (`pyproject.toml`), which plain `uv sync` never installs. Confirmed
+by installing it (`uv sync --extra tensorboard`): the suite is then a
+clean 179 passed. This is an environment/extras gap, not something the
+move broke — worth noting because whoever next runs `uv sync` on a fresh
+checkout needs `--extra tensorboard` (or `--extra tracking`) to match the
+documented 179 baseline.
+
+**Disk throughput (Task 4).** 200 randomly sampled trials' `input_features`
+read cold across 5 session files (`t15.2025.01.12`, `t15.2023.09.03`,
+`t15.2023.08.13`, `t15.2023.11.03`, `t15.2023.10.20`): 329.35 MB in 0.886s
+-- **371.7 MB/s, 4.43 ms/trial**. Against the pre-move HDD baseline of
+70-93 ms/trial, that is a **~16-21x speedup**. (Context: this machine has
+~17 GB RAM against a 13 GB dataset, so the *entire* dataset could in
+principle be page-cache-resident after enough passes -- this particular
+200-trial/5-file read was each file's first touch this session, so it is
+a genuine cold SSD number, not a cache artifact; see the methodology note
+below for why this distinction matters.)
+
+**Training throughput re-sweep (Task 5).** 3 real epochs,
+`temporal_s01_s15_switchboard` (3,150 train / 351 val trials, 98
+train batches/epoch, `GRUCTC` default hyperparameters), `num_workers` in
+{0, 1, 2, 4}, measured with the same non-invasive `TimedDataLoader`
+wrapper as the original HDD probe (`scratch/measure_timing_sweep.py`,
+generalizing `scratch/measure_timing.py`/`measure_timing_nw4.py`):
+
+| num_workers | epoch | seconds (train+val) | dataloader wait | train_loss | val_per |
+|---|---|---:|---:|---:|---:|
+| 0 | 0 | 71.93 | 14.67s (20.4%) | 12.4885 | 0.8223 |
+| 0 | 1 | 67.22 | 14.47s (21.5%) | 3.1021 | 0.7782 |
+| 0 | 2 | 62.33 | 15.47s (24.8%) | 3.0548 | 0.8080 |
+| 1 | 0 | 55.51 | 0.17s (0.3%) | 12.4703 | 0.8264 |
+| 1 | 1 | 49.00 | 0.21s (0.4%) | 3.1765 | 0.7569 |
+| 1 | 2 | 42.92 | 0.38s (0.9%) | 2.9911 | 0.7511 |
+| 2 | 0 | 59.15 | 0.21s (0.4%) | 12.4506 | 0.8473 |
+| 2 | 1 | 48.97 | 0.28s (0.6%) | 3.1318 | 0.7550 |
+| 2 | 2 | 41.86 | 0.39s (0.9%) | 3.0401 | 0.7501 |
+| 4 | 0 | 65.36 | 0.31s (0.5%) | 12.4561 | 0.8601 |
+| 4 | 1 | 48.91 | 0.38s (0.8%) | 3.0827 | 0.7408 |
+| 4 | 2 | 43.12 | 0.71s (1.6%) | 3.0320 | 0.7511 |
+
+Peak GPU memory: **1749.7 MB for every configuration** (num_workers
+affects the host-side pipeline only, not model memory; consistent with
+section 8's independently-measured 1.75 GB figure).
+
+**Against the pre-move baseline (292.8 s/epoch at `num_workers=2`, 74%
+dataloader wait): the dataloader is no longer the bottleneck at any
+`num_workers >= 1`.** Steady-state (epoch 3 of 3) wait fraction is under
+2% for `num_workers` in {1, 2, 4} and 24.8% even at `num_workers=0` --
+comfortably under the 40% concern threshold in every configuration. **The
+SSD alone resolved the bottleneck; the packed-cache work is not needed.**
+**Fastest measured: `num_workers=2`** (41.86s steady-state), but
+`num_workers=1` (42.92s) and `num_workers=4` (43.12s) are within ~3% of
+it -- statistically indistinguishable from a single 3-epoch run each.
+**The bottleneck is now GPU compute, not I/O**: any worker count >= 1
+fully overlaps loading with compute (wait time collapses from ~15s/epoch
+to well under 1s), and adding more workers past 1 buys nothing further
+because there is no more I/O time left to hide. `num_workers=0` remains
+measurably slower (62.33s, ~49% slower than `num_workers=2`) because
+without a background worker, loading and compute cannot overlap at all --
+this contradicts the pre-sweep hypothesis that IPC overhead might make
+`num_workers=0` competitive on an SSD; it does not, because the benefit
+of overlap does not depend on drive speed. `configs/experiment/switchboard_baseline.yaml`'s
+`num_workers` is updated to **2** on this evidence.
+
+**Methodology note: why a small-item-set DataLoader benchmark does not
+measure the same thing as real training.** Checked whether a "1.1
+ms/item" figure exists anywhere in this repo's history to cite as the
+original small-benchmark number -- it does not (`scratch/benchmark_dataloader.py`
+recorded ms/batch, not ms/item, and no script or doc mentions 1.1 ms/item
+specifically); rather than repeat an unverifiable number, `scratch/verify_dataset.py`
+(200 items, ONE session, `num_workers=0`) was re-run today and measures
+**2.43 ms/item** on the SSD -- still well below the real, full-epoch
+per-trial cost, but far closer to it than the same comparison would have
+been on the HDD. The general point holds regardless of drive: a benchmark
+that reads a small item set from a single session file will, to some
+degree, be warmed by the OS page cache and never touches the seek-cost
+(HDD) or open/close overhead (any drive) of walking many *distinct*
+files. Real training on `temporal_s01_s15_switchboard` walks 3,150
+distinct trials across 14 session files every epoch -- a categorically
+different access pattern. On the HDD this gap was enormous (a small
+in-cache benchmark vs. 70-93 ms/trial in real training); on the SSD the
+gap has shrunk dramatically (2.43 ms/item small-benchmark vs. ~4.43
+ms/trial cold real-file reads, Task 4) because SSDs are far less sensitive
+to random/scattered access than HDDs are to seek latency -- but the
+underlying methodological point is unchanged: **a benchmark that does not
+reproduce the real access pattern measures something else**, which is why
+this section's throughput numbers all come from the real
+`temporal_s01_s15_switchboard` split, not a small proxy set.
+
+**Corrected sweep time estimate, replacing the stale "~6 hours for all
+four runs" (and superseding the HDD-era 18.76h/25.50h correction
+above).** Extrapolating `num_workers=2`'s measured 41.86 s/epoch
+steady-state linearly by train-batch count (as section 8's own table
+did), using the same 28/65/98/104 batches/epoch for s01-s05/s10/s15/s20:
+
+| cut | train batches/epoch | s/epoch @ nw=2 (SSD) | 100 epochs |
+|---|---|---:|---:|
+| s01-s05 | 28 | 12.0s | 0.33h |
+| s01-s10 | 65 | 27.7s | 0.77h |
+| s01-s15 | 98 | 41.9s | 1.16h |
+| s01-s20 | 104 | 44.4s | 1.23h |
+| **all four, summed** | | | **3.50h** |
+
+Same caveat as before applies: `patience=5` will likely stop most runs
+well short of 100 epochs in practice, so 3.50h is an upper bound, not an
+expected runtime.
+
+**The patience inconsistency, checked and found not to exist.** The task
+that prompted this migration report asked to reconcile "the config
+comment says 10, a prior report referenced 5." Searched the entire
+tracked repo (config, source, tests, docs, git history including the
+`switchboard_baseline.yaml` file's original commit): `patience: 5` is
+the only production value anywhere, and it has been 5 since the config
+was first committed -- it already matches this document's own citation
+above ("`patience=5` (the configured default)"). The only literal `10`
+found is `tests/test_loop.py`'s `patience=10`, an arbitrary sentinel
+chosen purely to guarantee early stopping never triggers within that
+test's own 3-epoch run -- it does not claim to represent, and does not
+conflict with, the production default. No inconsistency to fix; recorded
+here so the claim is not repeated without evidence in the future.
+
+**mlruns/ and future moves.** `training/logging.py`'s `MLflowLogger`
+defaults to a local file store (`file:./mlruns`). MLflow has not
+actually been run in this project yet (no `mlruns/` directory exists),
+but once it is, MLflow bakes each run's **absolute** artifact path into
+its own metadata at creation time -- unlike `runs/` or `data/`, a plain
+copy/move of `mlruns/` to a new machine or path leaves every run pointing
+at a directory that no longer exists. Added `mlruns/` to `.gitignore`
+now (it was missing, so a first MLflow-enabled run could otherwise have
+been added to git by accident). If the repo moves again and MLflow has
+been used by then, `mlruns/` needs the same treatment `scratch/migrate.ps1`
+gave `.venv` this time -- i.e. don't carry it across as-is; either delete
+and let new runs recreate it, or re-point it via MLflow's own path-
+migration tooling, not a raw file copy.

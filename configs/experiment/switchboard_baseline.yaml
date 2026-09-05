@@ -34,16 +34,21 @@ training:
   learning_rate: 0.001
   grad_clip: 1.0               # matches training/loop.py's train_one_epoch default
   amp: true                    # only actually used when a CUDA device is available -- see scripts/02_train.py
-  num_workers: 4                 # docs/DESIGN.md section 8 originally decided num_workers=2 from a synthetic/
-                                  # smaller-scale benchmark. Revised 2026-09-04, per a full-scale real-data timing
-                                  # measurement (docs/DESIGN.md section 13's "Full-scale timing" entry): at the full
-                                  # 3,150-trial s01-s15 Switchboard train set, num_workers=2 still spent 62-74% of
-                                  # every steady-state epoch waiting on the dataloader; num_workers=4 cut steady-state
-                                  # epoch time by ~29% (317s -> 224s) but did NOT eliminate the bottleneck (wait
-                                  # fraction stayed 68-72%) -- the dataloader remains the dominant cost even here,
-                                  # flagged as a real follow-up investigation, not resolved by this bump alone.
-                                  # persistent_workers=True and pin_memory=True are set in scripts/02_train.py
-                                  # whenever num_workers > 0, not configurable from here.
+  num_workers: 2                 # REVISED 2026-09-04, post-migration H:(HDD)->D:(SSD) (docs/DESIGN.md section 14).
+                                  # The HDD-era numbers above (num_workers=2 spending 62-74% of epoch time waiting on
+                                  # the dataloader) do NOT hold on the SSD. Re-measured for real: 3 epochs on the full
+                                  # 3,150-trial s01-s15 Switchboard train set, num_workers in {0,1,2,4}. Steady-state
+                                  # (epoch 3 of 3) epoch time (train+val) / dataloader-wait fraction:
+                                  #   num_workers=0: 62.3s / 24.8%   num_workers=1: 42.9s / 0.9%
+                                  #   num_workers=2: 41.9s / 0.9%    num_workers=4: 43.1s / 1.6%
+                                  # Any num_workers >= 1 fully hides I/O behind GPU compute on the SSD; num_workers=0
+                                  # is the only configuration where the dataloader is still a real cost (~25%, still
+                                  # under the 40% concern threshold). 1/2/4 are statistically indistinguishable from
+                                  # each other (within ~3% of one another) -- the bottleneck is now GPU compute, not
+                                  # I/O. num_workers=2 measured marginally fastest and is kept as the default, leaving
+                                  # more CPU headroom than 4 for no measured cost. persistent_workers=True and
+                                  # pin_memory=True are set in scripts/02_train.py whenever num_workers > 0, not
+                                  # configurable from here.
 
 logging:
   wandb_project: b2t-drift
