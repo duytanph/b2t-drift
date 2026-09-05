@@ -196,7 +196,7 @@ Applied by the authors before release:
    for the whole recording, or even for a whole session — it is
    recomputed from the immediately preceding block's data. Blocks are
    usually ~50 trials (sometimes shorter — `docs/DATASET.md` section 11
-   / `docs/DESIGN.md` section 12, Task 4a: median ~42 trials/block,
+   / `docs/FINDINGS.md` ("Block count decreases over the recording..."): median ~42 trials/block,
    range ~22–50), so **the detection threshold is effectively
    re-estimated roughly every 50 sentences throughout the 20-month
    recording period.** This is a second, independent adaptive mechanism
@@ -271,7 +271,7 @@ Applied by the authors before release:
    width (as few as 1 prior sentence for the very first trial), so their
    normalization statistics are noisier than later trials' — this is a
    property of the released data, not something our pipeline introduces
-   or can remove. See `docs/DESIGN.md` sections 7, 6, and 11 for how this
+   or can remove. See `docs/DESIGN.md` sections 7, 6, and 12 for how this
    affects the split design, the "what a rising PER curve means"
    interpretation, and the warm-up-trials decision.
 
@@ -509,11 +509,11 @@ The full published pipeline goes: neural features → GRU + CTC → phoneme sequ
 
 ## 17. Open questions
 
-- [x] Verify the 512-feature column boundaries empirically (official docs are off by one) — confirmed 64-wide blocks; see `docs/DESIGN.md` section 12, Task 1.
-- [x] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline — done; serious confound found, see `docs/DESIGN.md` section 12, Task 2.
-- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code — loaded and inspected (not yet run for inference); see `docs/DESIGN.md` section 12, Task 4b.
-- [x] Determine typical block sizes and whether block count per session varies systematically over time — done; see `docs/DESIGN.md` section 12, Task 4a.
-- [x] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound — resolved: adopted as the PRIMARY analysis (`docs/DESIGN.md` section 7, corpus stratification decision); 17/30 held-out sessions survive a 50-trial threshold (corrected count — see the next item), full day-offset range (+5 to +546d) and all four curve endpoints preserved; see `docs/DESIGN.md` section 12, Task 2 (round 2).
-- [x] Resolve the CSV-vs-manifest trial-count discrepancy — resolved: goes both directions (not uniformly CSV ≥ actual), roughly proportional to corpus/partition size (not concentrated), and at least partly caused by confirmed partition misattribution (a Switchboard block's trials split across labeled `val` and unlabeled `test` were being counted as if fully labeled) rather than only QC drops. HDF5/manifest is authoritative for counts; CSV is authoritative for corpus labels. See `docs/DESIGN.md` section 12, Task 3 (round 2).
-- [x] Resolve the normalization unit — **RESOLVED, 2026-09-03 (window width corrected from an initial "10" on 2026-09-02 to "20"), by author correspondence, not by further empirical testing.** It is a rolling per-channel z-score over the previous up-to-20 sentences' speaking epochs (inclusive of the current sentence), causal, per Nicholas S. Card (corresponding author, Card et al. 2024). Not per-block, not per-session, not global — none of the three original hypotheses. This also explains why the lattice test (no shared divisor per block) and the ~0.06 per-block residual (overlapping per-sentence windows, not one shared statistic) both failed the way they did. See section 9 above and `docs/DESIGN.md` sections 7, 6, and 8.
-- [x] Decide warm-up-trial exclusion — **DECIDED 2026-09-03: keep all trials, exclude none.** Made before looking at any PER value, per this section's own rule. Every session is affected equally by the still-filling normalization window, so the effect can't masquerade as drift; excluding trials would also cost data from already-small sessions (as few as 80 trials) for the sake of avoiding a new, equally arbitrary threshold parameter. See `docs/DESIGN.md` section 11 for the full reasoning on both sides.
+- [x] Verify the 512-feature column boundaries empirically (official docs are off by one) — confirmed 64-wide blocks; see `docs/FINDINGS.md` ("Feature column layout verified empirically").
+- [x] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline — done; serious confound found, see `docs/FINDINGS.md` ("Corpus composition is a serious training/eval confound").
+- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code — loaded and inspected (not yet run for inference); see `docs/FINDINGS.md` ("Block count decreases over the recording...").
+- [x] Determine typical block sizes and whether block count per session varies systematically over time — done; see `docs/FINDINGS.md` ("Block count decreases over the recording...").
+- [x] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound — resolved: adopted as the PRIMARY analysis (`docs/DESIGN.md` section 7, corpus stratification decision); 17/30 held-out sessions survive a 50-trial threshold (corrected count — see the next item), full day-offset range (+5 to +546d) and all four curve endpoints preserved; see `docs/FINDINGS.md` ("Switchboard survivor count corrected to 17 of 30 sessions").
+- [x] Resolve the CSV-vs-manifest trial-count discrepancy — resolved: goes both directions (not uniformly CSV ≥ actual), roughly proportional to corpus/partition size (not concentrated), and at least partly caused by confirmed partition misattribution (a Switchboard block's trials split across labeled `val` and unlabeled `test` were being counted as if fully labeled) rather than only QC drops. HDF5/manifest is authoritative for counts; CSV is authoritative for corpus labels. See `docs/FINDINGS.md` ("Corpus CSV trial counts are unreliable; the manifest is authoritative").
+- [x] Resolve the normalization unit — **RESOLVED, 2026-09-03 (window width corrected from an initial "10" on 2026-09-02 to "20"), by author correspondence, not by further empirical testing.** It is a rolling per-channel z-score over the previous up-to-20 sentences' speaking epochs (inclusive of the current sentence), causal, per Nicholas S. Card (corresponding author, Card et al. 2024). Not per-block, not per-session, not global — none of the three original hypotheses. This also explains why the lattice test (no shared divisor per block) and the ~0.06 per-block residual (overlapping per-sentence windows, not one shared statistic) both failed the way they did — see `docs/FINDINGS.md` ("Normalization unit not resolved by statistical testing alone", "Normalization is not a simple affine transform of integer counts") and `docs/DESIGN.md` sections 7, 6, and 8.
+- [x] Decide warm-up-trial exclusion — **DECIDED 2026-09-03: keep all trials, exclude none.** Made before looking at any PER value, per this section's own rule. Every session is affected equally by the still-filling normalization window, so the effect can't masquerade as drift; excluding trials would also cost data from already-small sessions (as few as 80 trials) for the sake of avoiding a new, equally arbitrary threshold parameter. See `docs/DESIGN.md` section 12 for the full reasoning on both sides.

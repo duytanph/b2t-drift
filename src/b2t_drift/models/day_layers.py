@@ -49,8 +49,8 @@ This matters for two reasons:
   This confirms the choice actually made in the published baseline: the
   released pretrained checkpoint's `day_weights.0`..`day_weights.44` are
   identity matrices and `day_biases.0`..`day_biases.44` are zero vectors
-  before session-specific fine-tuning (`docs/DESIGN.md` section 7 / Task 4
-  checkpoint inspection) -- this module matches that convention, not an
+  before session-specific fine-tuning (`docs/DESIGN.md` section 7,
+  `docs/FINDINGS.md` checkpoint inspection) -- this module matches that convention, not an
   independent guess. This applies to every `parameterization` below, not
   only `"full"` -- see each variant's identity-init note.
 

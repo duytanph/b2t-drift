@@ -30,7 +30,8 @@ authoritative for CORPUS LABELS (which corpus a block belongs to) but NOT
 for trial COUNTS -- its per-block sentence counts have been found to
 disagree with the actual released HDF5 files for a nontrivial fraction of
 blocks, and do not distinguish labeled from unlabeled partitions at all
-(`docs/DESIGN.md` section 12, Task 3 round 2). Trial counts always come
+(`docs/FINDINGS.md`: "Corpus CSV trial counts are unreliable; the manifest
+is authoritative"). Trial counts always come
 from `hdf5_io` (attribute reads against the real files) or the
 `session_manifest.csv` it produces. `load_corpus_labels` below returns
 labels only, by design, and its docstring says so explicitly so this rule
@@ -139,7 +140,8 @@ def _trials_for_session(
         ValueError: If `corpus_filter` is given and a trial's
             `(session_id, block_num)` has no entry in `corpus_labels` --
             every block was found to have a corpus label when this CSV was
-            inspected (`docs/DESIGN.md` section 12), so a missing lookup
+            inspected (`docs/FINDINGS.md`: "Corpus CSV trial counts are
+            unreliable"), so a missing lookup
             here means the data has changed and should not be silently
             skipped.
     """

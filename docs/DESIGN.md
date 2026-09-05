@@ -1,9 +1,33 @@
 # Design decisions — the durable record of WHY
 
 This file records design decisions and their justification. `docs/DATASET.md`
-records WHAT the data is; this file records why we chose to work with it the
-way we do. When a decision changes, update this file and say why the old
-reasoning no longer holds — don't just delete it.
+records WHAT the data is; `docs/FINDINGS.md` records the dated empirical
+investigations behind these decisions; this file records why we chose to
+work with the data the way we do, as it stands now. When a decision
+changes, update this file and say why the old reasoning no longer holds —
+don't just delete it. Target length: under 400 lines. No chronology here —
+that belongs in `docs/FINDINGS.md`.
+
+## Summary
+
+Speech BCI decoders lose accuracy across days; this project measures that
+loss, attributes it to specific causes, and compares recalibration
+strategies under a fixed budget of participant time.
+
+- **Measurement** — how fast does PER degrade with days since calibration?
+- **Attribution** — why: channel death, tuning change, or subspace
+  rotation? (Marginal drift is already removed upstream — section 6.)
+- **Decision** — given a fixed budget of new-day participant time, what's
+  the best use of it?
+
+**Split:** train on an early block of sessions, swept at four cut points
+(1–5/1–10/1–15/1–20); evaluate each later session individually as a
+PER-vs-days-elapsed curve. Temporal only, never shuffled. Switchboard-only
+is the primary analysis.
+
+**Status:** data verified, pipeline built (a batch-composition bug found
+and fixed), hyperparameters set, dataloader bottleneck resolved — no
+drift-curve model has been trained yet.
 
 ---
 
@@ -11,63 +35,56 @@ reasoning no longer holds — don't just delete it.
 
 Speech BCI decoders lose accuracy across days; this repo quantifies the
 loss, attributes it to specific changes in the recorded features, and
-compares recalibration strategies under a fixed budget of user time.
+compares recalibration strategies under a fixed budget of user time (see
+Summary above for the one-paragraph version).
 
 ---
 
 ## 2. Terminology
 
-Precise definitions, because "split" and "held-out" get used loosely
-elsewhere and that looseness causes real mistakes here.
-
 - **"Our split"**: the temporal train/held-out boundary this project
   defines, cutting the 45 sessions by date into a training block (starting
-  at session 1, `t15.2023.08.11`) and everything after it. The base case is
-  sessions 1–15 train / sessions 16–45 held out, but section 7 below sweeps
-  this cut point across several values (1–5, 1–10, 1–15, 1–20) rather than
-  fixing it at 15 — "our split" refers to this general temporal-split
-  design, not one single fixed pair of session counts. This is entirely our
-  own construction; it does not exist as files anywhere.
+  at session 1, `t15.2023.08.11`) and everything after it. Base case:
+  sessions 1–15 train / 16–45 held out, but section 7 sweeps this cut
+  point across four values (1–5, 1–10, 1–15, 1–20) — "our split" means
+  this general design, not one fixed pair of session counts. Entirely our
+  own construction; not shipped as files.
 - **"Official split"**: the `data_train.hdf5` / `data_val.hdf5` /
-  `data_test.hdf5` files actually shipped with the dataset for the
-  Brain-to-Text '25 competition. Relevant to us for two reasons only: (1)
-  its `test` partitions are unlabeled, so 1,450 trials (13% of the dataset)
-  are unusable for any supervised purpose regardless of which split we use;
-  and (2) the provided pretrained checkpoint was trained on the official
-  split's `train`/`val` data spanning **all 45 sessions** (confirmed,
-  `args.yaml`'s `dataset.sessions` — Task 4b), so it has no held-out future
-  and cannot measure drift.
-- **"Held-out"** always means *withheld from our model* (i.e. not in our
-  split's training block) unless explicitly stated otherwise. It never
-  means the official split's `val`/`test` files unless said so explicitly
-  — those are a different withholding, from the official baseline, and (per
-  section 7) are not independent of each other or useful for drift.
+  `data_test.hdf5` files shipped for the Brain-to-Text '25 competition.
+  Relevant here only because (1) its `test` partitions are unlabeled
+  (1,450 trials, 13% of the dataset, unusable regardless of split), and
+  (2) the provided pretrained checkpoint was trained on this split's
+  `train`/`val` data spanning **all 45 sessions** (`docs/FINDINGS.md`:
+  "Block count decreases..."), so it has no held-out future and cannot
+  measure drift.
+- **"Held-out"** always means *withheld from our model* (not in our
+  split's training block) unless stated otherwise — never the official
+  split's `val`/`test` files, which are a different withholding and (per
+  section 7) not independent of each other or useful for drift.
 
 ---
 
 ## 3. Two models
 
 This project trains two distinct models. Conflating their numbers is a
-common and easy mistake — keep them separate in every results table.
+common, easy mistake — keep them separate in every results table.
 
 - **Model A — official-split pipeline check.** Trained on the official
-  split's `train` partition (all 45 sessions). Its only purpose is to
-  confirm our data loading, model, and training code produce a PER on the
-  same scale as published results — a correctness check, not a
-  contribution. **Run once.** Not part of the drift experiment, not
-  referenced in the drift curve, not comparable to Model B's numbers
-  (different training data, different scale of task).
-- **Model B — our-split drift model.** Trained on **our split** (section 2)
-  — the temporal cut-point sweep. Its PER curve across held-out sessions
-  **is the project**.
+  split's `train` partition (all 45 sessions). Confirms our data loading,
+  model, and training code produce a PER on the same scale as published
+  results — a correctness check, not a contribution. Run once; not part of
+  the drift experiment; not comparable to Model B (different training
+  data, different scale of task).
+- **Model B — our-split drift model.** Trained on **our split** (section
+  2) — the temporal cut-point sweep. Its PER curve across held-out
+  sessions **is the project**.
 - **The paper's published numbers (`docs/DATASET.md` section 2) are not a
-  comparison for drift, for either model.** The published system was
-  continuously, periodically recalibrated across its whole deployment;
-  Model B is calibrated once and then frozen. These measure different
-  quantities — "maintained performance under an active maintenance
-  regimen" vs. "performance decay under no maintenance at all." A gap
-  between our drift curve and the paper's flat curve is not evidence of a
-  worse decoder; it's the whole point of the study.
+  drift comparison, for either model.** The published system was
+  continuously, periodically recalibrated; Model B is calibrated once and
+  frozen. "Maintained performance under active maintenance" and
+  "performance decay under no maintenance" are different quantities — a
+  gap between our curve and the paper's flat one is not evidence of a
+  worse decoder; it's the point of the study.
 
 ---
 
@@ -75,1436 +92,322 @@ common and easy mistake — keep them separate in every results table.
 
 - **MEASUREMENT** — How fast does PER degrade as a function of days since
   calibration?
-- **ATTRIBUTION** — Why does it degrade? See section 6 for the current
-  (2026-09-02) set of candidate causes — this was revised after the
-  normalization mechanism was confirmed by author correspondence; it is no
-  longer the four-cause list from earlier drafts.
+- **ATTRIBUTION** — Why does it degrade? See section 6 for the current set
+  of candidate causes (revised once from four to three, after the
+  normalization mechanism was confirmed by author correspondence).
 - **DECISION** — Given a fixed budget of participant time on a new day,
   what is the best thing to spend it on? See section 5 for the candidate
-  interventions ("arms") this project compares.
+  interventions ("arms").
 
 ---
 
 ## 5. Recalibration strategies (Question 3 arms)
 
-The candidate interventions for the DECISION question, in increasing order
-of participant time cost. Each targets a different subset of the
-attribution causes in section 6.
+Candidate interventions for the DECISION question, increasing order of
+participant-time cost. Each targets a different subset of section 6's
+attribution causes.
 
-**Arm 1, "recompute per-session z-score statistics," is retired as an
-intervention.** It is not something we would do — the released data
-already does something strictly better: a continuous rolling per-channel
-z-score over the previous up-to-20 sentences, recomputed sentence by
-sentence within every session (`docs/DATASET.md` section 9, confirmed by
-author correspondence 2026-09-03; an initial reply said 10, corrected to
-20 the next day). Recomputing one statistic per session
-would be a *coarser*, less current version of what's already there, and it
-isn't a participant-time cost at all — it happens automatically, for free,
-as a property of the released data. There is nothing left for this arm to
-contribute, so it is removed rather than kept as a strawman.
+**A fourth candidate arm — "recompute per-session z-score statistics" —
+is retired.** The released data already does something strictly better: a
+continuous rolling per-channel z-score over the previous up-to-20
+sentences, recomputed sentence by sentence (`docs/DATASET.md` section 9
+item 7). Recomputing one statistic per session would be *coarser*, and
+isn't a participant-time cost at all — it happens for free, as a property
+of the release. Removed rather than kept as a strawman.
 
-The remaining arms, renumbered:
-
-- **Arm 0 — no adaptation (baseline).** Use the day-0 calibrated decoder
-  unmodified on a new day. Zero participant time, zero labels. This is
-  what the drift curve itself measures.
-- **Arm 1 (was Arm 2) — unsupervised distribution alignment** (e.g. CORAL,
-  Procrustes). **Zero labels** — only unlabeled neural data from the new
-  day is needed. **Targets subspace rotation** (section 6): if the
-  population-activity manifold has rotated in 256-d space but its
-  per-channel marginal statistics are already handled by the rolling
-  z-score, a linear alignment estimated from unlabeled data alone can in
-  principle undo the rotation.
-- **Arm 2 (was Arm 3) — fit a new day-specific input layer, freeze the
-  rest of the network, N labels.** Needs labeled data from the new day
-  (the participant speaking N known sentences). **Targets both tuning
-  change and subspace rotation** — a learned affine layer (structurally
-  identical to the `day_weights`/`day_biases` layers already found in the
-  official checkpoint, `docs/DESIGN.md` section 12, Task 4b) has more
-  degrees of freedom than a purely unsupervised alignment and can partially
-  compensate for a shifted phoneme-to-channel mapping, not just a rotation.
-- **Arm 3 (was Arm 4) — fine-tune the whole network, N labels.** Highest
-  participant-time cost (labels needed) and highest compute cost.
-  **Targets everything** — including tuning change and rotation, and in
-  principle any deeper change the other arms cannot reach — but carries
-  **catastrophic-forgetting risk at small N**: with too little new-day
-  data, whole-network fine-tuning can overfit to the N calibration
-  sentences and lose generalization the frozen-backbone arms would have
-  kept.
+| Arm | Labels needed | Targets | Notes |
+|---|---|---|---|
+| **0 — no adaptation (baseline)** | None | — | Day-0 calibrated decoder, unmodified. Zero participant time. This is what the drift curve itself measures. |
+| **1 — unsupervised distribution alignment** (e.g. CORAL, Procrustes) | None (unlabeled new-day data only) | Subspace rotation | If the population-activity manifold has rotated in 256-d space but per-channel marginals are already handled by the rolling z-score, a linear alignment from unlabeled data alone can in principle undo the rotation. |
+| **2 — new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | Structurally identical to the `day_weights`/`day_biases` layers found in the official checkpoint (`docs/FINDINGS.md`). More degrees of freedom than Arm 1; can partially compensate for a shifted phoneme-to-channel mapping. |
+| **3 — fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | Highest participant-time and compute cost. **Catastrophic-forgetting risk at small N**: too little new-day data and whole-network fine-tuning can overfit to the N calibration sentences, losing generalization the frozen-backbone arms would have kept. |
 
 ---
 
-## 6. Three-stage adaptation, and what a rising PER curve now means
+## 6. What a rising PER curve means
 
-Revised 2026-09-03. Originally written 2026-09-02 around the rolling
-z-score alone; expanded once author correspondence and `docs/DATASET.md`
-section 9 established that the release pipeline actually applies **three
-independent adaptive corrections, at three different timescales**, before
-any data reaches our model. This changes what the ATTRIBUTION question
-(section 4) can and cannot conclude, and is the reasoning behind the arms
-in section 5.
-
-### The three stages
+The release pipeline applies **three independent adaptive corrections, at
+three different timescales**, before any data reaches our model. This
+determines what the ATTRIBUTION question (section 4) can and cannot
+conclude, and motivates the arms in section 5.
 
 | # | Correction | Timescale | Removes |
 |---|---|---|---|
-| 1 | RMS spike-detection threshold (`docs/DATASET.md` section 9, item 3) | ~50 sentences (recomputed from the preceding BLOCK) | Slow drift in a channel's noise floor |
-| 2 | Rolling per-channel z-score (`docs/DATASET.md` section 9, item 7) | 20 sentences (rolling window) | Per-channel gain/offset (affine) changes |
-| 3 | Day-specific input layer (`docs/DESIGN.md` section 12, Task 4b) | Trained per session | Whatever a learned linear map on that session's data can capture — but starts at the identity, contributes nothing until trained |
+| 1 | RMS spike-detection threshold (`docs/DATASET.md` section 9 item 3) | ~50 sentences (recomputed from the preceding block) | Slow drift in a channel's noise floor |
+| 2 | Rolling per-channel z-score (`docs/DATASET.md` section 9 item 7) | 20 sentences (rolling) | Per-channel gain/offset (affine) changes |
+| 3 | Day-specific input layer (`docs/FINDINGS.md`: "Block count decreases...") | Trained per session | Whatever a learned linear map can capture — starts at identity, contributes nothing until trained |
 
-**Stage 1 — adaptive RMS threshold.** The −4.5×RMS detection threshold is
-re-estimated from the immediately preceding block's data, roughly every 50
-sentences throughout the recording. This removes SLOW CHANGES IN A
-CHANNEL'S NOISE FLOOR — if the ambient noise level drifts up or down over
-weeks, the threshold tracks it, so the *count* of crossings stays
-comparable. **It does NOT remove loss of spike amplitude relative to
-noise.** As an electrode becomes encapsulated (scar tissue forming around
-it), detectable spike amplitudes shrink while the noise floor itself holds
-roughly steady — SNR falls, spikes drop below the (noise-tracking)
-threshold, and the crossing rate genuinely, correctly declines. The
-threshold tracks noise, not signal, so it has no mechanism to compensate
-for this; a declining crossing rate from this cause is a real signal, not
-an artifact the pipeline is hiding.
+- **Stage 1** tracks noise, not signal: as an electrode becomes
+  encapsulated, spike amplitude shrinks while the noise floor holds
+  steady, so SNR falls and crossing rate genuinely declines — the
+  threshold has no mechanism to compensate. **Caveat:** a channel can be
+  actively dying while its crossing rate *appears* stable if the noise
+  floor happens to move the same direction. **Channel-mortality analysis
+  must use recovered raw spike counts (Hz, via `docs/DATASET.md` section 9
+  item 9) and the +10 clip-saturation signature (item 8), not crossing
+  rate alone.**
+- **Stage 2** removes per-channel affine changes only. It does **not**
+  remove: which channels respond to which phonemes, inter-channel
+  correlation structure (scale-invariant), the geometry of population
+  activity (a 256-d rotation isn't undone by 256 independent rescalings),
+  or temporal structure within a sentence.
+- **Stage 3** is our own intervention (Arm 2, section 5), not something
+  upstream — do not confuse it with stages 1–2.
 
-**CAVEAT — TX crossing rate is a DEGRADED measure of channel health under
-adaptive thresholding.** A channel can be actively dying while its
-crossing rate *appears* stable, if the noise floor happens to be moving in
-the same direction as the true signal loss (adaptive thresholding cannot
-distinguish "this channel is fine, the noise just moved" from "this
-channel is dying, but slowly enough that the threshold is still tracking
-its noise floor reasonably"). **The Week 2 channel-mortality analysis must
-therefore use recovered raw spike counts — reported in spikes per second
-(Hz), not normalized units, via the exact recovery route in
-`docs/DATASET.md` section 9 item 9 (`sigma = 1/spacing`,
-`mu = -min*sigma`, `raw = released*sigma + mu`, converted to Hz by
-dividing by the 20 ms bin width) — and the +10 clipping-saturation
-signature (`docs/DATASET.md` section 9, item 8), not crossing rate
-alone** — crossing
-rate is confounded by exactly the adaptation that's supposed to make it
-comparable across sessions.
+**Attribution reduces from four candidates to three:**
+- **Channel death** — an electrode stops producing usable signal.
+  Non-obvious interaction: z-scoring may *amplify* channel death rather
+  than hide it (dividing a near-zero-variance channel by its own near-zero
+  std inflates residual noise back to unit variance; the +10 clip then
+  caps it). Check empirically before relying on this as an explanation.
+- **Tuning change** — phoneme-to-channel mapping shifts (e.g. tissue/
+  electrode geometry changes). Not fixable by rescaling. Targeted by Arm 2.
+- **Subspace rotation** — the population-activity manifold's orientation
+  changes. Correctable in principle by a linear map (Arm 1, and within
+  reach of Arm 2).
+- **Marginal drift (gain/offset, noise-floor drift) is removed from view
+  by stages 1–2 and cannot be studied with this release** — it is no
+  longer a fourth candidate.
 
-**Stage 2 — rolling per-channel z-score.** Removes per-channel AFFINE
-changes only: absolute firing-rate shifts (offset) and variance shifts
-(gain), continuously, every sentence, over a 20-sentence window. It does
-**not** remove:
-- which channels respond to which phonemes (a permutation- or
-  mixing-level fact, not a scale),
-- inter-channel correlation structure (correlation is scale-invariant —
-  dividing two channels by their own standard deviations doesn't change
-  how correlated they are),
-- the geometry of population activity (a rotation or shear in 256-d
-  space is not undone by 256 independent 1-d rescalings), or
-- temporal structure within a sentence.
-
-**Stage 3 — day-specific input layer.** LEARNED, and initializes to the
-identity transform with zero bias (`torch.eye` / zeros, confirmed from the
-official checkpoint's `rnn_model.py` — `docs/DESIGN.md` section 12, Task
-4b follow-up). It contributes nothing to Model B until we train it; when
-trained, it is a linear map with enough degrees of freedom to partially
-compensate for tuning change and subspace rotation (see Arm 2, section 5),
-but it is our OWN intervention, not something the release data has already
-applied — do not confuse it with stages 1–2, which happen upstream of us
-regardless of what we do.
-
-### The attribution candidates reduce from four to three
-
-- **CHANNEL DEATH** — an electrode stops producing usable signal. Note a
-  non-obvious interaction with stage 2: z-scoring may **amplify** channel
-  death rather than hide it. Dividing a channel whose true variance has
-  collapsed toward zero by its own (near-zero) estimated std inflates
-  whatever residual noise remains back up to unit variance — the channel
-  doesn't disappear from the normalized signal, it turns into amplified
-  noise, which the +10 clip then caps (`docs/DATASET.md` section 9, item
-  8). **This should be checked empirically** (e.g. does clip-saturation
-  rate per channel correlate with other channel-health indicators, and
-  does it change over session date) before relying on it as an
-  explanation — see the CAVEAT above for why crossing rate alone can't
-  settle this.
-- **TUNING CHANGE** — the mapping from phoneme to channel response shifts,
-  e.g. because the electrode senses a different local neural population as
-  tissue and electrode geometry change over months. Not fixable by any
-  rescaling, since it's a change in *which* signal is present, not its
-  scale. Targeted by Arm 2 (section 5), which has enough degrees of
-  freedom to partially compensate.
-- **SUBSPACE ROTATION** — population activity occupies a low-dimensional
-  manifold within the 256-d channel space, and that manifold's orientation
-  has changed. Correctable in principle by a linear map applied across
-  channels — this is the premise of Arm 1 (section 5), and also within
-  reach of Arm 2.
-
-**Marginal drift (gain/offset, and now also slow noise-floor drift) is
-removed from view by stages 1–2 and cannot be studied with this release.**
-Gain/offset was originally a fourth candidate cause; it no longer is,
-because the released data has already had it continuously corrected out,
-every sentence, before we ever see it. Noise-floor drift specifically is
-also corrected out by stage 1, at the coarser ~50-sentence timescale — see
-the stage-1 discussion above for the one thing it does NOT cover (SNR
-loss from shrinking spike amplitude).
-
-**Resulting strength of the measurement.** Any degradation our drift curve
-shows has already survived THREE independent adaptive corrections at
-three different timescales (~50 sentences, 20 sentences, and — once we
-train it — per session). It therefore **cannot** be attributed to
-scaling, gain, offset, or noise-floor drift; whatever is left over is
-necessarily SNR loss (from genuine spike-amplitude shrinkage, which
-adaptive thresholding cannot mask — see stage 1), tuning change, or
-subspace-geometry change. Additionally, because stages 1–2 are both
-causal (only past and current data, matching what a real-time system can
-actually do — `docs/DATASET.md` section 9), our measurement describes a
-**realistically configured decoder**, not one that is ignoring an obvious
-fix a deployed system wouldn't have access to either. The drift curve is
-a meaningful, non-trivial measurement precisely *because* the easy
-explanations have already been ruled out by the data itself, not by our
-own preprocessing choices.
+**What this buys the measurement.** Any degradation the drift curve shows
+has already survived three independent, causal (past/current data only)
+adaptive corrections. It therefore cannot be attributed to scaling, gain,
+offset, or noise-floor drift — whatever is left is SNR loss, tuning
+change, or subspace-geometry change. The curve is meaningful precisely
+because the easy explanations are already ruled out by the data itself.
 
 ---
 
 ## 7. Split design and rationale
 
-### Cut-point sweep, not a single fixed cut
+**Cut-point sweep, not one fixed cut.** Trained separately at sessions
+1–5, 1–10, 1–15, and 1–20, producing four drift curves. Two reasons: (1)
+**robustness** — if the curve's *shape* is stable across cuts, the result
+doesn't hinge on an arbitrary choice of "15"; if it isn't, that's itself a
+finding about sensitivity to calibration-set size; (2) **a question of its
+own** — PER at a fixed day-offset across the four cuts measures how much
+calibration data buys how much drift-resistance. **Tradeoff:** more
+training sessions → stronger baseline but a shorter, more recent held-out
+time axis (training through session 15 leaves +5 to +546 days; through
+session 30 would cut that to roughly +5 to +166, discarding the six 2025
+sessions). This is why the sweep stops at 1–20.
 
-**Revised.** Earlier drafts of this document fixed the training cut at
-sessions 1–15. **The cut point is now swept over sessions 1–5, 1–10, 1–15,
-and 1–20**, training a separate Model B for each and producing **four**
-drift curves, not one.
+- **Why temporal, not random.** The question is extrapolation into the
+  future, not interpolation within a shuffled pool — a randomly-held-out
+  session tells you nothing about a decoder that's aging.
+- **Bootstrap CIs are mandatory.** Early held-out sessions have as few as
+  80 trials; PER on 80 sentences is noisy enough to look like structure by
+  chance. Every point on every curve needs an interval.
+- **Floor effect risk.** The 1–15 training block is 3,969 labeled trials
+  (~17.6 hours of speech) — comparable to Willett et al. 2023's 16.8-hour
+  budget (23.8% WER, 125K-word vocabulary), so a usable decoder is
+  plausible. The 1–20 cut (more training data) serves as a check on
+  whether floor effects distort the 1–5/1–10 curves.
+- **Validation set rule.** Early-stopping/hyperparameter data must come
+  from WITHIN the training sessions, never from held-out sessions —
+  peeking at the drift curve to tune hyperparameters would fit the model
+  to the test data by the back door. Examined once, at the end, per
+  cut-point model. Session 16 is a valid validation source for the 1–15
+  cut but must never be used for the 1–5 cut's evaluation of session 16.
 
-**Why this is affordable.** The Task 3 GPU benchmark (section 12) showed
-the full baseline architecture trains in ~1.3 hours per 10,000 steps on
-this machine. Four training runs cost roughly 6 hours total — affordable on
-a single machine, not a reason to compromise on model size or cut count.
+**Corpus stratification.** Switchboard-only, both train and eval, is the
+**primary analysis** (`splits/temporal_s01_s*_switchboard.json`);
+all-corpora is a named fallback (`temporal_s01_s15_allcorpora.json`,
+1–15 only) if Switchboard-only proves too small. Pooling all corpora
+would conflate task-distribution shift with neural drift — the training
+block is ~87–88% Switchboard while at least 8 of 30 held-out sessions
+have **zero** Switchboard trials (`docs/FINDINGS.md`: "Corpus composition
+is a serious confound"). Cost: 3,501 Switchboard vs. 3,969 all-corpora
+trials at the 1–15 cut, **11.8% less training data**. The Switchboard
+1–15 block is effectively 14 sessions: session 1 is 100% 50-Word,
+contributing zero Switchboard trials (recorded per session in every
+manifest, cut DATE unaffected). The ≥50-labeled-Switchboard-trial
+viability threshold (`passes_threshold` in every manifest) was fixed
+before seeing any PER value.
 
-**Why sweep instead of picking one cut and defending it.** Two distinct
-benefits:
-1. **Robustness.** If the drift curve's *shape* (not necessarily its exact
-   PER values, since baseline strength differs by cut) is stable across
-   cut points, the result does not depend on an arbitrary choice of "15."
-   If it isn't stable, that's itself an important finding about how
-   sensitive the measurement is to calibration-set size.
-2. **A question of its own.** Comparing PER at a fixed day-offset across
-   the four cuts directly measures how much calibration data buys how much
-   resistance to drift — a decision-relevant result independent of the
-   measurement/attribution questions in section 4.
+**Primary cut-point selection follows a rule fixed in advance of any PER
+value** — see `docs/FINDINGS.md`: "Pre-committed cut-point selection
+rule" for the exact rule and why recording it in advance matters.
 
-**The tradeoff, stated explicitly.** More training sessions gives a
-stronger baseline decoder (more calibration data) but a shorter time axis
-(fewer, more recent held-out sessions). Example: training through session
-15 leaves a held-out range of +5 to +546 days; training through session 30
-(illustrative, not one of the four swept cuts) would cut that to roughly
-+5 to +166 days — discarding the six 2025 sessions, the most valuable tail
-of the curve. This tradeoff is exactly why the sweep only goes up to 1–20,
-not further: beyond that point the shrinking time axis starts costing more
-than the stronger baseline buys.
-
-**Held-out spacing** for the 1–15 cut (the base case) is roughly
-logarithmic: +5 to +546 days, dense in the first two months, sparse in the
-tail — see `docs/DATASET.md` section 13 for the full list. Other cut
-points have correspondingly fewer, later-starting held-out sessions.
-
-**Why temporal, not random.** The question is extrapolation into the
-future, not interpolation within a shuffled pool. Shuffling sessions across
-time destroys the thing we're trying to measure — a randomly-held-out
-session tells you nothing about what happens to a decoder that's aging.
-
-**Bootstrap confidence intervals are mandatory, not optional.** Early
-held-out sessions have as few as 80 trials. PER computed on 80 sentences is
-noisy enough that random wiggle will look like structure without an
-interval around it. Every point on every one of the four curves needs one.
-
-### Floor effect risk
-
-At the base 1–15 cut, the training block is 3,969 labeled trials — roughly
-**17.6 hours of speech** (`total_minutes` summed over those 15 sessions,
-`data/interim/session_manifest.csv`). For context, Willett et al. 2023
-(the T12 predecessor dataset, `docs/DATASET.md` section 16) reached 23.8%
-WER on a 125,000-word vocabulary with 16.8 hours of training data —
-a comparable budget, so a usable decoder is plausible at this cut. But if
-the baseline PER is poor, the drift signal sits on top of an already-weak
-decoder and is harder to interpret (a curve that starts bad and stays bad
-is a different finding than a curve that starts good and degrades). The
-cut-point sweep partly mitigates this: the 1–20 cut has substantially more
-training data and serves as a check on whether floor effects are
-distorting the 1–5/1–10 curves.
-
-### Validation set rule
-
-**The validation set for early stopping and hyperparameter selection must
-come from WITHIN the training sessions** — held-out blocks or a random
-subset of trials from sessions in the training block — **never from our
-held-out (evaluation) sessions.** Inspecting the drift curve and then
-adjusting hyperparameters in response would fit the model to the test data
-by the back door; the whole point of the curve is that it's an honest,
-unpeeked-at estimate. **The drift curve is examined once, at the end**, for
-every one of the four cut-point models. This applies independently to each
-cut in the sweep — session 16 is a legitimate validation source for the
-1–15 cut's model but must never be for the 1–5 cut's held-out evaluation of
-session 16.
-
-### Corpus stratification decision
-
-**Switchboard-only for BOTH training and evaluation is the PRIMARY
-analysis** (`scripts/01_build_splits.py`, `splits/temporal_s01_s*_switchboard.json`);
-**all-corpora is generated only as a named fallback**
-(`splits/temporal_s01_s15_allcorpora.json`, 1–15 cut only) in case
-Switchboard-only proves too small a training set to reach a usable
-decoder — it is never the default, and the two are not directly
-comparable to each other (different training-set sizes and, for eval,
-different task distributions).
-
-**Justification:** with train and eval BOTH restricted to the same
-corpus, the drift curve isolates elapsed time as the only varying
-factor. Pooling all corpora would conflate task-distribution shift
-(evaluating on corpora the model never trained on) with neural drift —
-the training block is ~87–88% Switchboard by trial count (section 12,
-Task 2 finding) while at least 8 of the 30 base-case held-out sessions
-contain **zero** Switchboard trials at all, so an all-corpora curve is
-not measuring the same thing session to session. Switchboard-only
-removes that confound while preserving the full day-offset range and,
-critically, all six of the 2025 sessions.
-
-**The cost, measured exactly from the generated manifests
-(2026-09-03):** the 1–15 cut has **3,501 Switchboard trials** (3,150
-train + 351 val) versus **3,969 all-corpora** (3,571 + 398) — Switchboard-
-only trains on **11.8% less data** at that cut point (computed directly
-from `splits/temporal_s01_s15_switchboard.json` and
-`splits/temporal_s01_s15_allcorpora.json`; corrects an earlier "~13%"
-estimate — see the curve coverage entry in section 12 for the full
-sweep-build measurement this figure is drawn from). This is the tradeoff
-the all-corpora fallback exists to hedge against.
-
-**The Switchboard 1–15 training block is effectively 14 sessions, not
-15.** Session 1 (`t15.2023.08.11`) is 100% 50-Word — 0 of its 288 trials
-survive the Switchboard filter — so it contributes nothing to Switchboard
-training despite being counted in "sessions 1–15." This is recorded per-
-session, with trial counts after corpus filtering, in every Switchboard
-manifest's `train_sessions` field (`src/b2t_drift/data/splits.py`,
-`build_temporal_split`); a zero there is an auditable fact, not a silent
-gap. **The cut DATE (2023-10-15) is unchanged** — it is set by the 15th
-session's calendar date regardless of how many of those sessions actually
-contribute Switchboard trials — so the drift curve's x-axis origin is
-unaffected by this.
-
-**The ≥50-labeled-Switchboard-trial viability threshold was fixed in
-advance of seeing any PER values** (during the Task 2 feasibility check,
-section 12; enforced per eval session by `build_temporal_split`'s
-`min_eval_trials` and recorded as `passes_threshold` in every manifest —
-`src/b2t_drift/data/splits.py`) — a session below it is excluded from
-the primary curve because PER on fewer than 50 sentences is too noisy to
-plot as a meaningful curve point, not because of how it happens to
-score. It is FLAGGED in the manifest, never silently dropped, so which
-sessions were excluded and why stays auditable.
-
-### Why the official split cannot measure drift
-
-Within each session, `val` and `test` are trial-level splits of the *same*
-held-out block(s) — not independent generalization estimates — and every
-session (including the most recent ones) contributes training data. A
-model trained on the official split has seen data from every era of the
-recording, so it shows near-zero drift by construction: there is no
-temporal extrapolation anywhere in that design. It measures general
-decoding accuracy, which is the right target for the Brain-to-Text '25
-competition and the wrong one for this project. (This is why Model A,
-section 3, is a pipeline check only.)
-
-### Why the provided pretrained checkpoint cannot be used for the drift curve
-
-`data/external/t15_pretrained_rnn_baseline/checkpoint/args.yaml` lists all
-45 sessions under `dataset.sessions` — confirmed by direct inspection
-(Task 4b, section 12). It has seen every session in the dataset and has no
-held-out future. It remains useful for (a) validating our evaluation code
-against a known-good model, and (b) inspecting its 45 learned per-session
-day-layers as a record of how much per-session correction the official
-baseline needed — see Task 4 findings in section 12.
+**Why the official split cannot measure drift, and why the pretrained
+checkpoint cannot be used for the drift curve:** see `docs/DATASET.md`
+sections 12–13 for the full mechanism (val/test are trial-level splits of
+the same held-out blocks, not independent; every session, including the
+most recent, contributes training data, so the official split shows
+near-zero drift by construction). The pretrained checkpoint was trained
+on all 45 sessions (`docs/FINDINGS.md`: "Block count decreases..."), so
+it has no held-out future — useful only for validating our evaluation
+code and for inspecting its learned per-session day-layers.
 
 ---
 
 ## 8. Pipeline constraints derived from data inspection
 
 - **Lazy HDF5 loading.** The dataset is ~12 GB against a 16 GB system RAM
-  budget. `T15Dataset` must not hold everything in memory; it has to read
-  lazily from HDF5 per `__getitem__`.
-- **Length-bucketed batching, implemented as `LengthBucketedSampler`
-  (`data/collate.py`) — a deliberate choice, recorded here as instructed
-  by `collate.py`'s own docstring.** `n_time_steps` spans 138–2179+ bins
-  (the wider range from later sessions — section 10 on sentence length),
-  roughly 7.4x within any one sample and more across the full dataset.
-  Random batching wastes most of each batch on padding; sorting trials by
-  length before chunking into batches measurably helps: on a 32-trial
-  pool at batch_size 8, padding waste (padded elements / total elements)
-  falls from **35.5% (random) to 13.7% (bucketed)**
-  (`scratch/verify_collate.py`, 2026-09-03). Only the ORDER of batches
-  (not their contents) is shuffled per epoch, with a small (`bucket_noise`)
-  random jitter on the sort key so the same trials aren't batched together
-  identically every epoch. **The cost, stated explicitly**: this makes
-  batches non-i.i.d. in sentence length — a given batch is drawn from a
-  narrow duration band, not a uniform sample of the dataset. Standard
-  practice in speech recognition training; accepted as a worthwhile
-  tradeoff for the padding reduction, not treated as a bug.
-- **DataLoader config: `num_workers=2`, `persistent_workers=True`,
-  `pin_memory=True` — the decision, not just an option (2026-09-03,
-  `scratch/benchmark_dataloader.py`).** An earlier benchmark measured only
-  200 items and concluded `num_workers=0` was faster — wrong, because
-  Windows `spawn` worker-startup overhead (~1-2s, paid once) swamped the
-  signal at that scale. Redone with 2,048 items, batch_size=32, reporting
-  marginal ms/batch after excluding the first 100 warmup items:
-  `num_workers=0` -- 380 ms/batch; `num_workers=2` -- 35 ms/batch;
-  `num_workers=4` -- 27 ms/batch. Budget context: the GPU benchmark
-  measured the baseline model at ~461 ms/step fp32, roughly half that
-  (~230 ms/step) in fp16, so data loading must stay well under ~230
-  ms/batch or it becomes the training bottleneck. **`num_workers=0` does
-  NOT clear that bar and must never be used for real training or
-  evaluation runs.** `num_workers=4` is marginally faster in steady state
-  than `num_workers=2` (27 vs 35 ms/batch) but not meaningfully so relative
-  to the ~230 ms budget either clears comfortably; **`num_workers=2` is
-  the chosen default**, leaving more CPU headroom for anything else
-  running on the same machine during training.
-
-  > **UPDATE, 2026-09-04, from a full-scale real-data measurement
-  > (`scratch/measure_timing.py`, `scratch/measure_timing_nw4.py`) --
-  > `num_workers=2` does NOT actually clear the compute budget at real
-  > scale, and the default is revised to `num_workers=4`.** The benchmark
-  > above used synthetic, fixed-length tensors; run for real against the
-  > full 3,150-trial `temporal_s01_s15_switchboard` train set (real
-  > variable-length HDF5 reads, `GRUCTC` at its default hyperparameters,
-  > batch_size=32, 98 batches/epoch), steady-state epochs (epoch 2 of 3;
-  > epoch 0 pays one-time worker-spawn cost) spent **74% of epoch time
-  > waiting on the dataloader at `num_workers=2`** (217.4s of 292.8s).
-  > `num_workers=4` cut steady-state epoch time by ~29% (317.2s -> 224.3s,
-  > comparing each config's second epoch) but did NOT eliminate the
-  > bottleneck -- wait time was still 68.5% of epoch time at
-  > `num_workers=4` (153.6s of 224.3s). **The dataloader remains the
-  > dominant cost at both settings**; this is a real, unresolved
-  > performance gap between the smaller/synthetic benchmark's conclusion
-  > and full-scale behavior, flagged here as a genuine follow-up
-  > investigation (candidates: real per-trial HDF5 read cost at the
-  > actual, wide `n_time_steps` distribution vs. the benchmark's fixed
-  > length; CPU contention between worker processes and the main
-  > process's own per-batch work; higher `num_workers` values untested
-  > here), not something this config bump resolves on its own.
-  > `configs/experiment/switchboard_baseline.yaml`'s `num_workers` is
-  > updated to `4` on this evidence.
-- **Normalization is already applied, and is NOT block/session/global —
-  it's a rolling per-channel, per-sentence window. [RESOLVED 2026-09-02,
-  by author correspondence — see `docs/DATASET.md` section 9.]** Earlier
-  drafts of this document assumed normalization was left to us, then
-  (once the values were found to already be z-scored) spent two rounds of
-  empirical investigation trying to determine whether the unit was
-  per-block, per-session, or global — never finding a clean answer,
-  because none of the three was correct. Nicholas S. Card (corresponding
-  author, Card et al. 2024 NEJM) confirmed by email: `input_features` are
-  z-scored per channel using a rolling window of up to the previous 20
-  sentences' speaking epochs (corrected from an initial "10" the next
-  day), inclusive of the current sentence — causal, matching what a
-  real-time system can do. This also explains, precisely,
-  why both empirical tests failed the way they did: the lattice test
-  assumed one shared divisor per block (there isn't one — every sentence
-  has its own), and the ~0.06 per-block statistical residual came from
-  pooling many overlapping per-sentence windows into one recomputed
-  statistic. **`data/normalize.py` should not implement any block/session/
-  global z-score** — the values are already normalized, by a mechanism
-  outside our control, and reproducing or reversing it would require
-  reconstructing the exact rolling-window procedure (out of scope unless a
-  specific downstream need arises). See section 6 for what this means for
-  interpreting the drift curve, and section 10 for the resulting
-  evaluation caveats (early-session trials, elapsed-time confound).
-- **GPU budget is not a constraint on model size.** The Task 3 benchmark
-  (section 12) showed the full baseline architecture (5 layers, 1024
-  hidden) trains in ~1.3 hours per 10,000 steps at fp32 on this machine,
-  with no OOM risk even at batch=64. Ablations and the main drift-curve
-  runs can use the full-size model throughout — there is no need to fall
-  back to the "small" (3 layer, 512 hidden) config to fit a GPU memory
-  budget (peak VRAM was and remains comfortably under 8 GB -- the real
-  training loop's own full-scale measurement, 2026-09-04, found 1.75 GB
-  peak for the small/default config on the full s01-s15 Switchboard set).
-
-  > **CORRECTION, 2026-09-04: "~6 hours for all four runs" was a
-  > GPU-compute-only estimate that never included the dataloader, and is
-  > wrong as a wall-clock affordability claim.** The full-scale timing
-  > measurement above (this section's DataLoader UPDATE) found the
-  > dataloader, not GPU compute, is the dominant cost: 74% of
-  > steady-state epoch time at `num_workers=2`, still 68.5% at
-  > `num_workers=4`. Measured on the actual default (small: 3-layer,
-  > 512-hidden) config, full pipeline (data + compute), `s01-s15` alone:
-  > **224.3s/epoch steady-state at `num_workers=4`** (304.98s/epoch at
-  > `num_workers=2`), i.e. **~6.2 hours for 100 epochs of ONE cut
-  > point**, not all four. Extrapolated LINEARLY by train-batch count
-  > (98/65/28/104 batches/epoch for s15/s10/s05/s20 respectively) to 100
-  > epochs on every one of the four Switchboard cut-point sweep splits:
-  >
-  > | cut | train batches/epoch | s/epoch @ nw=4 | 100 epochs @ nw=4 | 100 epochs @ nw=2 |
-  > |---|---|---|---|---|
-  > | s01-s05 | 28 | 64.1s | 1.78h | 2.42h |
-  > | s01-s10 | 65 | 148.8s | 4.13h | 5.62h |
-  > | s01-s15 | 98 | 224.3s | 6.23h | 8.47h |
-  > | s01-s20 | 104 | 238.1s | 6.61h | 8.99h |
-  > | **all four, summed** | | | **18.76h** | **25.50h** |
-  >
-  > Both totals are upper bounds: `patience=5` (the configured default)
-  > will very likely stop most runs well short of 100 epochs in
-  > practice, and `num_workers=4` did not close the dataloader gap
-  > (still the dominant cost, per above) -- treat 100 epochs as a worst
-  > case for planning, not an expected runtime.
+  budget — the Dataset class reads lazily per `__getitem__`, never holds
+  everything in memory.
+- **Length-bucketed batching** (`LengthBucketedSampler`,
+  `data/collate.py`). `n_time_steps` spans 138–2179+ bins (~7.4x within
+  one session, more across the dataset); random batching wastes most of
+  each batch on padding. Sorting before chunking cuts padding waste from
+  35.5% (random) to 13.7% (bucketed) at a 32-trial pool, batch_size 8.
+  Only batch ORDER is shuffled per epoch (with jitter so the same trials
+  aren't grouped identically every epoch) — batch CONTENTS are not
+  randomized. **Cost, accepted deliberately:** batches are non-i.i.d. in
+  sentence length (a narrow duration band per batch, not a uniform
+  sample) — standard practice in speech recognition, not a bug.
+- **DataLoader: `num_workers=2`, `persistent_workers=True`,
+  `pin_memory=True`.** Determined by three rounds of benchmarking at
+  increasing realism, the first two of which reached the wrong conclusion
+  at small/synthetic scale (`docs/FINDINGS.md`: "num_workers
+  benchmarking"). **Methodology lesson:** an early benchmark reported ~1
+  ms/item by re-reading a small, single-session set resident in the OS
+  page cache; real training walks 3,150 distinct trials across 14 files
+  and measured 70–93 ms/item on the HDD — a benchmark that doesn't
+  reproduce the real access pattern measures something else. An SSD
+  migration resolved the bottleneck entirely (`docs/FINDINGS.md`: "SSD
+  migration") — dataloader wait is now under 2% of epoch time at
+  `num_workers >= 1`; GPU compute is now the dominant cost.
+- **Normalization is already applied upstream** — a rolling per-channel,
+  per-sentence window, NOT per-block/session/global
+  (`docs/DATASET.md` section 9 item 7). `data/normalize.py` must not
+  implement any block/session/global z-score of its own; the values are
+  already normalized by a mechanism outside our control.
+- **GPU budget is not a constraint on model size.** The full baseline
+  architecture (5 layers, 1024 hidden) trains with no OOM risk even at
+  batch=64 (`docs/FINDINGS.md`: "GPU compute is not a constraint");
+  real-training peak VRAM for the actual small/default config is 1.75 GB
+  (`docs/FINDINGS.md`: "SSD migration"). No need to shrink the model to
+  fit a GPU memory budget.
+- **PER is independent of batch composition.** `GRUCTC.forward` zeros
+  every padded timestep immediately after `DayLayers` and before the
+  smoothing convolution; `input_lengths` is a mandatory forward argument.
+  Fixed 2026-09-04 after a real bug was found and measured — see
+  `docs/FINDINGS.md`: "Batch composition changed decoded output" for the
+  mechanism and the before/after numbers.
 
 ---
 
 ## 9. Metrics
 
-**PER (phoneme error rate) is primary.** It measures the neural decoder in
-isolation, directly from `seq_class_ids`, with no downstream language model
-in the loop.
+**PER (phoneme error rate) is primary.** Measures the neural decoder in
+isolation, directly from `seq_class_ids`, with no downstream language
+model in the loop.
 
-**WER (word error rate) is out of reach on this machine and is a stated
-limitation, not silently skipped.** The published pipeline's language-model
-stage needs roughly 60 GB RAM for the 3-gram model (300 GB for 5-gram) and
-~12.4 GB VRAM for OPT-6.7B rescoring (`docs/DATASET.md` section 15). On a
-16 GB Windows machine, PER is achievable and WER is not, short of a heavily
-pruned n-gram or a rented large-memory instance. Report PER as primary and
-say plainly that WER was not computed, rather than reporting only PER
-without saying why.
+**WER is out of reach on this machine — a stated limitation, not silently
+skipped.** The published pipeline's LM stage needs ~60 GB RAM (3-gram,
+300 GB for 5-gram) and ~12.4 GB VRAM for OPT-6.7B rescoring
+(`docs/DATASET.md` section 15). On a 16 GB Windows machine, PER is
+achievable and WER is not, short of a heavily pruned n-gram or a rented
+large-memory instance.
 
-### PER computation: silence is scored, not excluded
-
-**DECIDED: silence (class 40) is INCLUDED in PER.** CTC blanks are
-removed and consecutive repeats are collapsed per the standard decoding
-procedure (`greedy_ctc_decode`, `src/b2t_drift/evaluation/ctc_decode.py`),
-but the silence token itself is NOT removed -- it is scored as a regular
-token, exactly like any of the 39 phonemes, in the Levenshtein alignment
-against the ground-truth sequence (`evaluation.edit_distance`) that
-`aggregate_error_rate` / `bootstrap_error_rate_ci`
-(`evaluation.metrics`) build PER from.
-
-**Field convention.** The Brain-to-Text lineage uses a 41-token
-vocabulary -- 39 phonemes, silence, and the CTC blank -- and computes PER
-by removing repeats and blanks from the decoded sequence, taking
-Levenshtein distance to the ground-truth phoneme sequence (which itself
-contains silence tokens), and normalizing by the total number of
-ground-truth phonemes. This project follows that convention rather than
-inventing its own.
-
-**Why.** Silence marks word boundaries. A decoder that gets every
-phoneme right but misplaces the silence tokens between them produces
-text a downstream language model cannot use for word segmentation
-(`docs/DATASET.md` section 15) -- since the pipeline this metric is
-meant to stand in for depends on those boundaries, excluding silence
-from PER would make the decoder look better than it actually performs
-for that purpose.
-
-**Week 2 caveat -- affects visualization only, not PER.** Silence is
-roughly 25% of all tokens (5 of 21 in `trial_0149`; `docs/DATASET.md`
-section 14: "silence will dominate any confusion matrix"). Any phoneme
-confusion matrix built in Week 2 will be visually dominated by the
-silence row/column if plotted at the same scale as every other class.
-**Plot silence separately, or normalize per row**, when building that
-matrix. This does not change PER itself -- PER is a single aggregate
-number, computed the same way regardless of how a confusion matrix is
-later drawn -- it only affects how that matrix should be read.
+**Silence is scored, not excluded.** CTC blanks are removed and
+consecutive repeats collapsed per standard decoding, but the silence
+token (class 40) is scored as a regular token in the Levenshtein
+alignment — the field convention for this dataset lineage. **Why:**
+silence marks word boundaries; a decoder that gets every phoneme right
+but misplaces silence produces text a downstream LM can't use for word
+segmentation, so excluding silence from PER would flatter the decoder
+beyond what it can actually support. **Visualization caveat only, not a
+PER change:** silence is ~25% of tokens and will dominate any confusion
+matrix at a shared scale — plot it separately or normalize per row.
 
 ---
 
-## 10. Stated limitations
-
-- **Single participant.** Everything here is one person's brain. Nothing
-  generalizes across subjects.
-- **All results offline.** Closed-loop performance differs, because in
-  real use the participant adapts to the decoder's behavior — nothing in
-  this dataset captures that adaptation.
-- **Speaking strategy is unrecoverable.** Some blocks are attempted
-  *vocalized* speech and some are attempted *silent* speech; the authors
-  deliberately do not publish which is which, so it cannot be controlled
-  for.
-- **Test partitions are unlabeled.** 1,450 trials (13% of the dataset) are
-  unusable for supervised work — neither trainable nor scorable.
-- **Normalization is sentence-indexed, not time-indexed.** The rolling
-  window (section 8, `docs/DATASET.md` section 9) counts *sentences*, and
-  sessions differ in how many trials they contain (`docs/DESIGN.md`
-  section 12, Task 4a: median ~42 trials/block, and block count per
-  session varies). Two sessions the same number of *days* apart from the
-  training block do not necessarily have gone through the same number of
-  normalization-window updates. **Check whether per-session PER correlates
-  with session trial count before attributing any effect on the drift
-  curve to elapsed time** — a correlation with trial count rather than
-  (or in addition to) day-offset would indicate a normalization-exposure
-  confound, not pure temporal drift.
-- **The first ~20 sentences of each session are normalized on a
-  still-filling window** (as few as 1 prior sentence for the very first
-  trial of a session), so their normalization statistics are noisier than
-  later trials'. **Elevated PER on early trials in a session is expected
-  to be a normalization artifact, not evidence of drift** — do not
-  interpret it as such. See section 11 for the resulting warm-up-trials
-  decision this implies for evaluation.
-- **ALS progression over the 20-month recording span may change what the
-  participant can attempt to articulate**, independent of anything
-  happening to the electrodes. This is **indistinguishable from electrode
-  degradation in this dataset** — both would show up as declining decode
-  quality over time, and nothing here lets us separate "the signal is
-  harder to read" from "the signal itself is different because the
-  underlying motor attempt has changed." Neither this dataset nor this
-  project's design can resolve that ambiguity; it should be stated
-  alongside any drift-curve result, not resolved away.
-- **Sentence length correlates with session date, and the Switchboard-only
-  restriction reduces but does not eliminate this confound (2026-09-03,
-  `scratch/investigate_sentence_length.py`).** Longer sentences have more
-  phonemes and different error statistics, so a length trend can
-  masquerade as drift. At the session level (n=45), median seq_len vs.
-  date: Pearson r=0.27 (p=0.074, not significant) but Spearman ρ=0.47
-  (p=0.0012, significant) — the discrepancy is driven by several sessions
-  dominated by the much-shorter 50-Word corpus (median seq_len ~17–19)
-  scattered non-monotonically through the timeline (`t15.2023.08.11`,
-  `t15.2024.03.03`, `t15.2024.04.25`, `t15.2024.04.28`), which hurts the
-  linear fit more than the rank-based one. The TRAIN block's median
-  seq_len (26.0) is somewhat shorter than the 30 held-out sessions'
-  (28.25). **Composition alone does not fully explain the trend**: at the
-  trial level, restricting to Switchboard only (n=6,491) still shows a
-  significant, if weak, upward trend (Pearson r=0.137, p=1.3e-28) — smaller
-  than but not eliminated by conditioning on a single corpus. Figure:
-  `figures/sentence_length_over_time.png` (visually, the Switchboard-only
-  series is far smoother than the all-corpora series, confirming corpus
-  composition drives most of the large swings, but the Switchboard-only
-  series still drifts mildly upward end to end). **Verdict: a mild-to-
-  moderate confound, not a serious one, and not fully handled by
-  Switchboard-only alone. Per-session median seq_len must be reported
-  alongside PER on every drift curve**, so a reader can visually check
-  whether the two covary before attributing a PER change to elapsed time
-  rather than sentence length.
-
----
-
-## 11. Open decisions before Week 1
-
-Decisions that must be made — and the rationale recorded here — **before**
-any implementation work in `src/b2t_drift/data`, `models`, or `training`
-begins, and in the case of anything touching evaluation, **before looking
-at any PER value**, per the validation-set rule in section 7.
-
-- **WARM-UP TRIALS. DECIDED 2026-09-03: keep all trials, exclude none.**
-  This decision, and the reasoning behind it, was recorded here BEFORE
-  any PER value from any model was examined -- per this section's own
-  rule that such decisions must precede looking at any PER value.
-
-  **The case against keeping them.** The rolling z-score normalization
-  uses up to the previous 20 sentences (`docs/DATASET.md` section 9), so
-  the first ~20 trials of each session are normalized on a
-  partially-filled window (as few as 1 prior sentence for the very
-  first trial of a session) and are noisier as a result -- section 10's
-  "still-filling window" limitation.
-
-  **The case for keeping them, which won out:**
-  - Excluding them discards data from sessions that are already small --
-    as few as 80 trials in the earliest held-out sessions (section 7). A
-    fixed N=20 exclusion would remove a quarter of that session's
-    already-scarce evaluation budget.
-  - The exclusion threshold N would itself be an arbitrary parameter --
-    trading one uncontrolled-noise problem for a new, undocumented
-    tunable choice with no principled way to set it.
-  - Every session is affected by this window-filling effect EQUALLY: it
-    happens once, always at the start of each session's own trial
-    sequence, regardless of that session's calendar date. The effect
-    therefore does not trend with elapsed time and cannot masquerade as
-    drift -- at worst it adds noise uniformly to every session's PER,
-    rather than biasing the drift curve's shape in one direction.
-
-  **Consequence.** Readers of the drift curve should expect somewhat
-  noisier per-trial behavior at the start of any session's evaluated
-  trials, but this is accounted for by the mandatory bootstrap
-  confidence intervals (section 7, `evaluation.metrics.
-  bootstrap_error_rate_ci`) rather than by trial exclusion.
-
----
-
-## 12. Findings from Tasks 1–4
-
-Investigation scripts live in `scratch/` (gitignored, not committed).
-Figures referenced below are committed under `figures/`.
-
-### Task 1 — feature layout (2026-09-01)
-
-- **TX/SBP boundary at column 256: CONFIRMED**, but not by the originally
-  planned test. Threshold-crossing values are *not* raw integer counts in
-  the released files — see the normalization finding below — so an
-  integrality test found nothing. Instead, a **discreteness** test
-  (distinct-value count per column, which survives an affine z-scoring
-  transform) gives an extremely sharp result: columns 0–255 take ~0.6% as
-  many distinct values as samples (small integer counts, quantized even
-  after normalization); columns 256–511 take ~76% as many distinct values
-  as samples (continuous). The transition is exactly at column 256.
-- **64-wide array boundaries (64/128/192) within TX: CONFIRMED, weak but
-  real signal.** A naive 3-way comparison of candidate boundary sets
-  (0/64/128/192 vs the README-literal 0/65/129/193 vs 0/63/127/191) gave
-  within-vs-across correlation gaps too close to call (0.0129 vs 0.0127 vs
-  0.0125). A wider test settles it: scanning all integer shifts of the
-  three internal boundaries from −16 to +16, the gap is a smooth,
-  unimodal curve that peaks *exactly* at shift 0 (0.0129, vs. the next
-  best neighbors at 0.0127 and 0.0125, falling off monotonically further
-  out). A single 3-way comparison would have been weak evidence; the full
-  scan is not. In absolute terms the correlation is still small (~0.018
-  mean within-block r vs ~0.005 across-block) — electrodes on the same
-  array are only weakly more correlated than electrodes on different
-  arrays, consistent with TX being sparse, mostly-independent spike
-  counts rather than a shared local field signal.
-- **Per-block homogeneity (part c):** every one of the 8 hypothesized
-  64-wide blocks (4 TX + 4 SBP) has per-column mean ≈ 0 and variance ≈ 1.
-  This is expected given the normalization finding below, and by itself
-  provides no additional boundary evidence (z-scoring makes all blocks
-  look homogeneous by construction).
-- **Verdict:** the `docs/DATASET.md` section 7 table (64-wide blocks,
-  columns 0–63/64–127/.../448–511) is confirmed on two independent tests.
-  The README's literal 0–64/65–128/... boundaries are not supported.
-- **Unplanned but important finding — input_features appear
-  pre-normalized.** Spot-checking raw HDF5 values directly (not just the
-  sampled-block statistics) shows every column has mean ≈ 0, std ≈ 1, and
-  TX columns take on a small repeated set of exact float values (e.g.
-  `-0.5859305` recurring hundreds of times in a single trial) —
-  consistent with small integer counts having already been passed through
-  a fixed per-column affine transform before release. This contradicted
-  the earlier draft of `docs/DATASET.md` section 9 ("Left to us:
-  Normalization"), which has since been corrected there, and — as of
-  2026-09-02 — fully resolved by author correspondence (see section 8
-  above).
-- Figure: `figures/feature_layout_correlation.png`
-
-### Task 2 — corpus composition confound check (2026-09-01)
-
-- **Corpora found: 6, not 5.** Switchboard (7,672 trials), Freq words
-  (2,050), 50-Word (1,091), Openwebtext (172), Harvard (98), Random (79).
-  `docs/DATASET.md` section 10 names only five corpora (Switchboard,
-  OpenWebText2, 50-word, frequent-word, random); **Harvard sentences are
-  an additional corpus not mentioned there** and have since been added.
-- **Verdict: SERIOUS CONFOUND, not mild.** The planned TRAIN block
-  (sessions 1–15) is 86.9% Switchboard / 8.5% 50-Word / 3.7% Openwebtext
-  and contains **zero** Freq words or Harvard trials. The 30 held-out
-  sessions are 56.0% Switchboard / 31.2% Freq words / 10.7% 50-Word / 1.5%
-  Harvard — a 31-percentage-point jump in Freq words alone, from a corpus
-  the training data never saw at all. Worse: **8 of the 30 held-out
-  sessions have zero Switchboard trials** (7 are 100% Freq words, 1 is
-  100% 50-Word). For those 8 sessions, every evaluated trial comes from a
-  corpus absent from training — any PER measured there conflates neural
-  drift with pure out-of-distribution task shift and cannot be
-  interpreted as a clean drift estimate. This is why section 7 adopts
-  Switchboard-only as the primary analysis.
-- **Era concentration:** Freq words is confined to 2023-10-22 through
-  2023-12-29 (11 sessions); Harvard to 2023-10-20 through 2023-11-03 (3
-  sessions); Openwebtext to 2023-09-29 through 2023-10-15 (entirely
-  *inside* the train window). Only Switchboard and 50-Word recur across
-  the full 20-month span.
-- Figure: `figures/corpus_composition_over_time.png` (stacked bars at true
-  session dates, not a continuously-interpolated area chart — the two
-  multi-month recording gaps would otherwise render as a fictitious smooth
-  trend).
-
-### Task 3 — GPU timing benchmark (2026-09-01)
-
-RTX 2080 SUPER, 8 GB VRAM, synthetic tensors (batch=32, `input_size=512`,
-`output_size=41`, CTC loss, forward+backward+optimizer step; 10 warmup + 50
-timed steps).
-
-| model | seq_len | precision | ms/step | peak VRAM | hours @ 10k steps |
-|---|---|---|---|---|---|
-| baseline (5L, 1024H) | 527 (none) | fp32 | 461.0 | 3.4 GB | 1.28 h |
-| baseline (5L, 1024H) | 527 (none) | fp16 | 203.9 | 2.0 GB | 0.57 h |
-| baseline (5L, 1024H) | 132 (4x) | fp32 | 120.7 | 1.3 GB | 0.34 h |
-| baseline (5L, 1024H) | 132 (4x) | fp16 | 57.8 | 0.9 GB | 0.16 h |
-| small (3L, 512H) | 527 (none) | fp32 | 104.9 | 1.1 GB | 0.29 h |
-| small (3L, 512H) | 527 (none) | fp16 | 80.3 | 0.7 GB | 0.22 h |
-| small (3L, 512H) | 132 (4x) | fp32 | 28.1 | 0.4 GB | 0.08 h |
-| small (3L, 512H) | 132 (4x) | fp16 | 21.6 | 0.3 GB | 0.06 h |
-
-- **No configuration OOM'd**, at batch=32 or batch=64. Peak VRAM at
-  batch=64 topped out at 6.1 GB (baseline, fp32, no downsampling) — still
-  under the 8 GB budget, but with limited headroom once the OS/desktop's
-  own ~0.7 GB VRAM baseline usage (observed via `nvidia-smi`) is
-  accounted for.
-- fp16 autocast (`torch.float16`, not bf16 — Turing has no native bf16
-  support) roughly **halves** step time across the board, as expected.
-  4x temporal downsampling gives a comparable or larger speedup than fp16
-  alone.
-- The official baseline's real architecture is not directly comparable to
-  this benchmark grid — see Task 4b below: it uses input patching
-  (`patch_size=14`, `patch_stride=4`), making its GRU input dimension
-  7,168, not the 512 used here. This benchmark bounds our own from-scratch
-  architecture's cost, not the official baseline's.
-- No `GradScaler` was used for the fp16 runs (acceptable for a pure speed
-  benchmark on random targets; a real fp16 training run should use one).
-- **This benchmark is why section 7's four-cut sweep is affordable** — see
-  the sweep rationale above.
-
-### Task 4 — block structure and pretrained checkpoint (2026-09-01)
-
-**4a — blocks per session** (from `data/interim/session_manifest.csv`
-only): median 6 blocks/session (range 3–11), median ~42 trials/block
-(range ~22–50). Block count correlates negatively with session order
-(r = −0.40): the earliest sessions tend to have more blocks (e.g.
-`t15.2023.08.13` has 11) than later ones (many late sessions have 3–6).
-Figure: `figures/blocks_per_session.png`.
-
-**4b — pretrained checkpoint**
-(`data/external/t15_pretrained_rnn_baseline/checkpoint/best_checkpoint`,
-loaded with `torch.load(map_location="cpu", weights_only=True)` as
-instructed — **this failed** with an `UnpicklingError` on
-`numpy.core.multiarray.scalar`, not because the checkpoint contains
-anything unsafe, but because newer numpy renamed `numpy.core` to
-`numpy._core`, and torch's safe-globals allowlist matches by the pickled
-module/qualname *string*, which no longer lines up with the renamed
-module. Fell back to `weights_only=False` for this specific,
-documented-source file (the official `nejm-brain-to-text` pretrained
-baseline release).
-
-From the state_dict shapes:
-- **5 GRU layers**, hidden size **768** (`weight_ih_l0` etc. shaped
-  `(2304, ...)` = 3×768 gate-concatenated).
-- **GRU input size is 7,168, not 512** — because the official model
-  patches the input: `args.yaml` gives `patch_size: 14, patch_stride: 4`,
-  so each GRU input step is 14 consecutive 20 ms bins concatenated
-  (14 × 512 = 7,168), stepped every 4 bins (80 ms) — consistent with
-  `docs/DATASET.md` section 5's note that the real-time system outputs
-  one phoneme every 80 ms.
-- **Output size 41** (`out.weight` shaped `(41, 768)`), confirming
-  `ctc_output_size=41` independently from the checkpoint.
-- **Per-session day-specific input layers: CONFIRMED present**, but not
-  via the "first dimension == 45" heuristic (that check found nothing).
-  They're stored as 45 *separately-keyed* tensors —
-  `day_weights.0` .. `day_weights.44` (each `512x512`) and `day_biases.0`
-  .. `day_biases.44` (each `1x512`) — one per-session affine input
-  transform, applied before the shared GRU. This is a direct architectural
-  confirmation of the "day-specific input layer" concept in
-  `GLOSSARY.md`, and structurally the same shape as Arm 2 in section 5.
-- **`args.yaml` confirms `dataset.sessions` lists all 45 sessions** —
-  direct confirmation that this checkpoint cannot be used for the drift
-  curve (see section 7 above). It also lists `dataset_probability_val`, a
-  0/1 flag per session; the 4 sessions flagged `0` are exactly the 4
-  train-only sessions we already knew about (`t15.2023.08.11`,
-  `t15.2024.03.03`, `t15.2024.04.25`, `t15.2024.04.28`) — independent
-  cross-validation of that fact.
-- Checkpoint's recorded `val_PER = 0.101` (10.1%), `val_loss = 22.45`, on
-  the official split (i.e. not comparable to Model B's numbers, per
-  section 3 — different training data, different question).
-- `use_amp: true` in `args.yaml` — the official baseline was trained with
-  mixed precision, same choice our Task 3 benchmark evaluates.
-
-### Follow-up — normalization unit, statistical approach (2026-09-01)
-
-Direct follow-up to the Task 1 finding above that `input_features` are
-already z-scored. Sampled every train block from 3 sessions spanning early
-2023 / mid 2024 / early 2025 (18 blocks total), recomputed per-column
-mean/std at block, session (train-only and full train+val+test), and
-3-session-pooled granularity (`scratch/investigate_normalization_unit.py`).
-
-- **Per-block: rejected.** Recomputed block-level column means/stds have a
-  5th–95th-percentile spread of ~0.06 across the 512 columns. If a block's
-  own data were exactly what was normalized against, recomputing its mean
-  on itself is an exact identity and must land within floating-point
-  precision (~1e-6), not 0.06.
-- **Per-session: tighter, but not confirmed.** Pooling a session's own
-  train blocks gives ~0.025 spread; adding that session's val+test blocks
-  (i.e. the *whole* session) tightens it further to ~0.019–0.026 depending
-  on the session — closer to zero than block-level, but still an order of
-  magnitude above floating-point precision. Exact per-session
-  normalization, recomputed on the same population it was supposedly fit
-  on, is not confirmed.
-- **Global (fixed, dataset-wide statistics): the diagnostic prediction did
-  not materialize.** If a single fixed mean/std were computed once (e.g.
-  early in the deployment) and never updated, later sessions should show
-  growing deviation from 0/1 as genuine neural drift accumulates —
-  that's the residual signal the whole project is trying to measure.
-  Plotting per-block column means for 6 representative columns across 12
-  sessions spread over the full 20 months
-  (`figures/normalization_unit_check.png`) shows **no visible trend**: all
-  values stay within roughly ±0.08 of zero throughout, with no monotonic
-  drift.
-- **Verdict at the time: block-level rejected with high confidence.
-  Session vs. global not distinguished by this evidence.** Superseded (not
-  contradicted) by the Task 1 arithmetic follow-up below, which explains
-  *why* this statistical test couldn't cleanly resolve session-vs-global:
-  the premise the arithmetic method depends on (a simple fixed affine
-  transform of integer counts) does not hold cleanly enough to test either
-  hypothesis to machine precision. **Both are now moot** — resolved
-  2026-09-02 by author correspondence: it's a rolling per-sentence window,
-  which is why no fixed-unit hypothesis could ever have fit cleanly. See
-  section 8 above.
-- Confirmed via the official repo's `model_training/dataset.py` and
-  `model_training/rnn_model.py` (fetched from GitHub) that no further
-  normalization is applied downstream of the HDF5 files — whatever
-  produced the observed 0/1 statistics happened entirely upstream of what
-  either the official pipeline or ours currently touches. Also confirmed
-  there that the per-session `day_weights`/`day_biases` layer is a
-  *learned* parameter initialized to the identity transform (`torch.eye`)
-  and zero bias — not a fixed normalization step, and not the source of
-  the pre-release z-scoring.
-
-### Task 1 (round 2) — settling the normalization unit arithmetically (2026-09-01)
-
-Attempted to replace the statistical test above with an exact one: TX
-columns are integer spike counts before release, so if
-`released = (raw - mu) / sigma`, the distinct released values in a column
-must sit on an evenly-spaced lattice with spacing `1/sigma`, letting
-`(mu, sigma)` be solved exactly rather than estimated statistically. Same 3
-sessions, all train blocks (18 blocks), all 256 TX columns
-(`scratch/recover_normalization_params.py`).
-
-- **Result: the lattice does not exist.** Only 3 of 4,608 (session, block,
-  column) triples showed evenly-spaced values under the test — and all 3
-  are float32-precision artifacts, not real lattices: their recovered
-  `sigma` values are exactly `2^24` and `2^25` (16,777,216 and
-  33,554,432), the float32 mantissa-precision limit, and "inverting" them
-  gives absurd raw counts up to ~350 million. **99.9% of cases showed no
-  constant spacing at all.**
-- **This was checked for robustness, not just accepted at face value.**
-  One column/block (session `t15.2023.08.13`, block 1, column 0) has 212
-  distinct values over 40,727 samples (0.52% — consistent with the
-  "discrete-looking" TX signature from Task 1 of the prior round), but:
-  - The most common single value covers only 2.7% of samples — not the
-    heavily zero-dominated distribution a sparse spike count would
-    produce.
-  - Consecutive-difference sizes span ~5 orders of magnitude (1e-5 to
-    ~1) with **no bimodal gap** separating "same level" from "different
-    level" — ruled out a min-diff artifact by sweeping candidate spacings
-    at several percentiles of the diff distribution (p1/p5/p10/p25/p50);
-    the best fit found any of them was 17.5% of diffs matching an integer
-    multiple, far short of the ~99% a real lattice would show.
-- **Control (step 5): SBP columns show no lattice either** (0/108
-  (block, column) cases), as expected for genuinely continuous data —
-  this validates that the method correctly distinguishes lattice from
-  non-lattice structure when a non-lattice case is actually presented to
-  it, so the TX non-result is not simply a broken detector.
-- **Verdict, per the decision rule: NOT A SIMPLE AFFINE TRANSFORM OF
-  INTEGER COUNTS. Stopping rather than reporting mu/sigma.** Steps 3
-  (compare recovered params across blocks/sessions) and 4 (invert on a
-  full session, report firing-rate range) do not apply — there was nothing
-  to compare or invert. `scratch/recovered_normalization.csv` was still
-  saved with the per-(session, block, column) test results for the record,
-  including the 3 float32-artifact false positives, but it is not a usable
-  parameter table.
-- **Explained in full, 2026-09-02 (window width corrected 2026-09-03, see
-  `docs/DATASET.md` section 9 item 7):** this non-result was exactly
-  correct. Nicholas S. Card confirmed the real transform uses a
-  *different divisor per sentence* (a rolling up-to-20-sentence window),
-  so integer counts never land on one shared per-block or per-session
-  lattice regardless of
-  how clean the raw counts were — the lattice test's premise (one fixed
-  affine transform per block) could not have succeeded no matter how
-  precisely it was run. See section 8 above.
-
-### Task 2 (round 2) — Switchboard survivor table, corrected (2026-09-01)
-
-Rebuilt the Switchboard-viability table from Task 2 (prior round) using the
-method the Task 3 discrepancy investigation (below) showed is necessary:
-per-(session, block) trial counts read directly from the HDF5 files
-(train+val partitions only), joined to the CSV's block-level corpus label,
-rather than trusting the CSV's own per-block trial counts
-(`scratch/switchboard_survivor_table.py`).
-
-- **17 of 30 held-out sessions survive** the ≥50-labeled-Switchboard-trial
-  threshold (down from the prior round's less precise estimate of 19/30 —
-  see the Task 3 correction below for why). Day-offset range of survivors:
-  **5 to 546 days**, unchanged — the full range is still preserved.
-- **All four requested curve endpoints PASS:** `2023-10-20` (+5d, 98
-  trials), `2023-10-22` (+7d, 83 trials), `2025-03-14` (+516d, 83 trials),
-  `2025-04-13` (+546d, 94 trials).
-- **TRAIN block (sessions 1–15):** 3,501 labeled Switchboard trials out of
-  3,969 total labeled trials (88.2%) — consistent with, and a slightly
-  more precise version of, the prior round's ~87–88% estimate.
-- Two sessions flip from the prior round's PASS to FAIL under the
-  corrected method: `2023-11-03` (+19d, was counted as exactly 50 using
-  the CSV's raw count, actually only 25 labeled Switchboard trials — see
-  the worked example in the Task 3 finding below) and `2023-12-29` (+75d,
-  similarly overcounted by the CSV).
-- Figure (redrawn with the corrected numbers): `figures/switchboard_trials_per_session.png`.
-
-### Task 3 (round 2) — resolving the CSV-vs-manifest discrepancy (2026-09-01)
-
-Compared CSV block-level trial counts against actual per-block HDF5 trial
-counts (not just per-session totals, as the prior round's check did) —
-265 (session, block, split) rows total, at the same granularity the CSV
-itself reports (`scratch/investigate_csv_manifest_discrepancy.py`).
-
-- **(a) Direction: goes both ways, not uniformly CSV ≥ actual.** 30 rows
-  have CSV > actual (total excess +249), but 4 rows have actual > CSV
-  (total excess −35), netting to the previously-found +214. The earlier
-  "QC drops during packaging" hypothesis predicts only the first direction
-  and is therefore incomplete as a full explanation.
-- **(b) Concentration: roughly proportional to corpus/partition size, not
-  disproportionately concentrated.** Switchboard accounts for 24/34
-  mismatched rows and 174/214 of the total absolute discrepancy — but
-  Switchboard is also ~69% of all trials, so this is close to its base
-  rate, not special concentration. `train`-partition rows are mismatched
-  somewhat more than `val`/`test` (27 vs. 7 rows), but again roughly
-  tracks partition size.
-- **(c) Shared property: mismatched blocks skew toward smaller blocks
-  (mean 32.7 actual trials vs. 42.6 for matched blocks), and several
-  mismatches are suspicious round numbers (several instances of exactly
-  ±10, ±5) in BOTH directions.** A concrete worked example
-  (`t15.2023.11.03`): the CSV lists block 6 as Switchboard with 50
-  sentences; the actual HDF5 block 6 has 50 trials **total across val+test
-  combined (25 in each)** — so the CSV's 50 is right for the *block*, but
-  only 25 of those are in the *labeled* (val) partition, the other 25
-  being in unlabeled test. A count computed straight from the CSV without
-  partition-awareness silently mixes labeled and unlabeled trials. This
-  specific mechanism doesn't explain every mismatched row (some really are
-  short by more trials than test/val would account for), so packaging-time
-  drops are still a plausible contributor to the remainder, but partition
-  misattribution is now a *confirmed*, not just hypothesized, contributor.
-- **(d) Authoritative source, and how the Switchboard analysis must handle
-  this:** the **HDF5 files (and therefore the manifest) are authoritative
-  for trial counts** — they are what will actually be loaded and trained
-  or evaluated on. The CSV is authoritative for **block-to-corpus
-  labeling** (every block has exactly one corpus label there, and no
-  boundary/attribution problems were found in the corpus assignment
-  itself — 0/265 blocks had a missing corpus lookup). The correct method,
-  now used in Task 2's corrected table above, is: **join the CSV's
-  per-block corpus label to the HDF5's actual per-block, per-partition
-  trial count** (train+val only for "labeled"), rather than using either
-  source's trial counts alone. Using the CSV's counts directly (as the
-  prior round did, even with a session-level cap) understated the risk of
-  partition misattribution and produced at least two wrong PASS/FAIL
-  calls, corrected above.
-
-### Task 1 (round 3) — per-channel floor analysis: raw firing rates ARE recoverable per sentence, but not via the naive pooled-minimum method (2026-09-03)
-
-A prior conversational claim inferred a raw firing rate from the global
-feature minimum (-3.5107, from the feature-clipping check above) without
-checking three things: which column produced it, whether it's a repeated
-(genuine zero-count) value or a one-off, and whether a single per-channel
-minimum even means anything under rolling normalization (each sentence has
-its own window, so there's no single fixed per-channel scale to invert in
-the first place). That claim was never committed to these docs, but is
-worth recording as a corrected result now that it's been properly tested
-(`scratch/investigate_channel_floor.py`, 501 trials, 3 sessions spanning
-the date range).
-
-- **(b) The -3.5107 global minimum is an SBP column (278), not TX.**
-  Applying a Poisson spike-count inversion to it would have been a
-  category error regardless of anything else — SBP is continuous power,
-  not a count.
-- **(a) TX and SBP per-channel minima are very different distributions.**
-  TX per-channel min: median -0.85, [5th, 95th] = [-1.18, -0.50], never
-  below -1.44. SBP per-channel min: median -2.12, [5th, 95th] =
-  [-2.78, -1.64], down to -3.51. Reporting only the global extreme
-  (as the original claim did) silently picked the SBP tail.
-- **(e) The zero-count assumption holds up well, empirically.** For every
-  one of the 256 TX channels, the minimum value (within 0.05) recurs more
-  than 100 times (median 13,207 occurrences) — the minima are plateaus,
-  not one-off outliers, consistent with genuine zero-count bins rather
-  than sampling noise.
-- **(c)/(d) The naive method, corrected to use only real TX-channel minima,
-  gives surprisingly plausible numbers in aggregate** despite the
-  conceptual problem below: implied firing rate median 36.3 Hz, and
-  83.2% of the 256 TX channels land in the physiologically plausible
-  20-100 Hz range (16.0% below, 0.8% above). This is a much better
-  outcome than the flawed -3.51-based claim would have suggested, but see
-  the next point for why it still shouldn't be trusted as a precise
-  per-channel measurement.
-- **(f) The real fix is testing the lattice at the correct granularity:
-  per SENTENCE, not per block.** Under rolling normalization, all bins of
-  a single trial share exactly one (mu, sigma) — unlike a block, which
-  mixes many different sentences' windows together (why the earlier
-  per-block lattice test in section 9/12 found nothing). Tested on 30
-  trials x 8 TX channels = 240 (trial, channel) pairs: **the lattice is
-  confirmed in 230/240 (95.8%) of cases**, each yielding an exact,
-  assumption-free recovered sigma for that specific sentence and channel
-  (median 0.56, range 0.23-0.88 — sigma genuinely varies sentence to
-  sentence, as expected under a rolling window).
-- **Conclusion, stated with the appropriate confidence split:**
-  - **Per-(sentence, channel) sigma is recoverable EXACTLY, with high
-    confidence**, via the per-sentence lattice test — this is a hard
-    arithmetic result, not an inference, and directly settles the
-    question. There is no single "the channel's sigma," only one value
-    per sentence, because that is what rolling normalization actually
-    computes.
-  - **The pooled-minimum-plus-Poisson method used for parts (c)/(d) is
-    conceptually unsound** (it silently averages over many different
-    sentence-specific windows as if there were one fixed per-channel
-    scale) but happened to produce physiologically plausible numbers
-    once restricted to genuine TX channels. Treat its 83.2%-in-range
-    result as a rough, favorable cross-check, not as a validated
-    measurement method — do not build anything in Week 2+ that depends
-    on a *single* recovered mu/sigma per channel.
-  - **Update, 2026-09-03: the exact per-(sentence, channel) recovery is
-    now fully worked out** — `sigma = 1/spacing`, `mu = -min * sigma`,
-    `raw = released*sigma + mu` — and gives a median implied rate of
-    ~24 Hz, disagreeing with the Poisson approximation's ~36 Hz by
-    roughly 1.5x. **Use the exact route, not the Poisson figure, for any
-    Week 2 firing-rate analysis** — see `docs/DATASET.md` section 9,
-    item 9 for the full method and justification.
-
-### Curve coverage — cut-point sweep manifests, measured (2026-09-03)
-
-All five split manifests (`scripts/01_build_splits.py`,
-`src/b2t_drift/data/splits.py`) were built and validated against the real
-data. Exact numbers, read directly from the written manifests:
-
-| cut     | cut date   | train | val | eval sessions | passing | offset range |
-|---------|------------|------:|----:|---------------:|--------:|---------------|
-| s01–s05 | 2023-08-25 |   908 | 101 |             40 |      27 | +2 to +597    |
-| s01–s10 | 2023-09-29 | 2,098 | 235 |             35 |      22 | +2 to +562    |
-| s01–s15 | 2023-10-15 | 3,150 | 351 |             30 |      17 | +5 to +546    |
-| s01–s20 | 2023-11-17 | 3,336 | 371 |             25 |      15 | +100 to +513  |
-| s15 all corpora | 2023-10-15 | 3,571 | 398 | 30 |      30 | +5 to +546    |
-
-("train"/"val" are trial counts; "passing" is the count of eval sessions
-with `passes_threshold: true`, i.e. ≥50 trials; "offset range" spans only
-those passing sessions.)
-
-**THE s15 GAP.** The 17 passing day-offsets for the primary `s01–s15`
-Switchboard cut are exactly: `5, 7, 133, 145, 152, 154, 208, 243, 278,
-280, 287, 453, 455, 516, 518, 532, 546`. There is **no coverage between
-+7 and +133 days** — a 126-day hole. This falls in the "frequent words"
-corpus era, whose sessions don't clear the 50-Switchboard-trial threshold
-at this cut. This is recorded as a **limitation of the measurement** (the
-curve simply has no data point in that window) — not a design flaw to be
-engineered around by, say, lowering the threshold or switching corpora
-mid-curve, either of which would trade a known gap for an unknown bias.
-
-**THE s20 CUT IS POOR VALUE.** Going from s15 to s20 buys only 186 more
-training trials (3,150 → 3,336, a 5.9% increase) while losing 5 eval
-sessions (30 → 25 total, 17 → 15 passing) and **both** early time points
-(+5 to +546 shrinks to +100 to +513 — the +5, +7, and +133-to-+287 region
-is gone entirely). It is retained in the sweep only as a boundary case
-for how far the cut can be pushed before the shrinking time axis clearly
-costs more than the larger training set buys (section 7, "Cut-point
-sweep, not a single fixed cut") — **not as a primary-analysis candidate**
-in its own right.
-
-**THE TRADEOFF IS THE POINT.** s01–s05 (908 train trials, 27 passing
-eval sessions spanning +2 to +597 days) versus s01–s15 (3,150 train
-trials — 3.5x more — but only 17 passing eval sessions and the 126-day
-hole above) is the cut-point sweep's central tradeoff made concrete: more
-calibration data against a shorter, gappier time axis. Surfacing this
-tradeoff explicitly is an **intended result** of sweeping the cut point
-at all (section 7) — it is not an obstacle the sweep failed to avoid.
-
-**CORPUS RESTRICTION COST, corrected.** 3,969 (all-corpora) → 3,501
-(Switchboard) at the s15 cut is **11.8%** less training data, not the
-~13% previously estimated in earlier drafts of this document — see the
-corpus stratification decision above (section 7) for the full
-computation and its provenance; both mentions of this figure in this
-document now agree.
-
-### Pre-committed decision rule for primary cut-point selection (2026-09-03)
-
-Recorded here, before any PER has been computed on any of the five
-manifests above, so that the primary cut point is chosen by a rule fixed
-in advance rather than by looking at results and picking whichever cut
-looks best after the fact:
-
-> The primary cut point will be selected as follows: use the largest cut
-> point whose baseline validation PER is acceptable, preferring earlier
-> cut points when PER is comparable (within 2 absolute percentage
-> points), on the grounds that earlier cuts give better curve resolution.
-> If no cut point yields a usable decoder under Switchboard-only
-> training, fall back to `temporal_s01_s15_allcorpora` and report the
-> corpus confound as a stated limitation rather than restricting
-> evaluation. This rule was fixed before any PER was computed.
-
-**Why recording this in advance matters.** A rule chosen after seeing the
-PER curves could always be rationalized to justify whichever cut point
-happens to produce the most favorable-looking result — "largest cut with
-acceptable PER, ties to the earlier cut" sounds principled regardless of
-which cut it ends up picking, which is exactly what makes a *post-hoc*
-version of it untrustworthy. Committing to the specific rule, the
-specific tolerance (2 points), and the specific fallback (all-corpora,
-not a different Switchboard cut, and not a lowered threshold) in this
-document, on this date, before any training run has produced a PER
-number, is what makes the eventual selection a principled decision rather
-than a post-hoc one — the distinction is entirely about *when* the rule
-was written down, not about whether the rule sounds reasonable.
-
----
-
-## 13. Model hyperparameters (2026-09-03)
+## 10. Model hyperparameters
 
 `src/b2t_drift/models/gru_ctc.py`'s `GRUCTC.__init__` and
 `src/b2t_drift/models/day_layers.py`'s `DayLayers` are this project's only
-model family (`CLAUDE.md`: no premature abstraction, one model family, one
-dataset). Every default value below is recorded here, with the same tag
-used in the source docstring, so the reasoning lives outside the code too
-and survives a refactor that might otherwise lose it. Tags: `[principled]`
-(derived from a physical or architectural argument), `[convention]`
-(standard in this specific literature), `[judgment call]` (a reasonable
-choice given constraints, not derived from first principles), or `[fixed
-by data]` (not a free hyperparameter at all).
+model family (`CLAUDE.md`: no premature abstraction). Tags: `principled`
+(physical/architectural argument), `convention` (standard in this
+literature), `judgment call` (reasonable given constraints, not derived),
+`fixed by data` (not a free hyperparameter).
 
-- **`n_layers = 3`.** Baseline uses 5. Reduced because our Switchboard-
-  only training set is 3,150 trials versus roughly 8,000 for the
-  baseline; depth is the first thing to cut when data is limited. Three
-  is also the common floor for sequence models of this kind — below that,
-  RNNs tend to underfit temporal structure. `[judgment call — revisit if
-  the baseline underfits]`
-- **`hidden_size = 512`.** Pretrained checkpoint uses 768. Reduced for
-  the same data-budget reason. 512 also matches the input dimension,
-  which keeps the first layer square. `[judgment call — sweep this]`
-- **`dropout = 0.4`.** High by general ML standards, standard in this
-  specific literature. Willett's speech RNN and its descendants use
-  heavy regularization because the datasets are small and the input is
-  noisy. `[convention]`
-- **`bidirectional = False`.** A bidirectional GRU sees the entire
-  utterance before emitting, which is fine offline but impossible in a
-  real-time system. The deployed system emits a phoneme every 80 ms
-  while the participant is still speaking. Since this project measures a
-  realistically-configured decoder, causal is the honest default.
-  Bidirectional would improve offline PER and is a legitimate ablation,
-  but must not be the default. `[principled]`
-- **`smoothing_sigma_bins = 2.0`.** From the published pipeline (sigma =
-  2 bins = 40 ms). Physical argument: articulatory gestures last roughly
-  50-150 ms, so 40 ms of smoothing averages away per-bin spike-count
-  variance without blurring the gestures being decoded. Both documented
-  in the literature and derivable from the timescale of speech.
-  `[principled]`
-- **`n_classes = 41`.** Not a hyperparameter. CTC blank (0) + 39 ARPABET
-  phonemes (1-39) + silence (40), verified empirically against
-  `seq_class_ids` (`b2t_drift.phonemes`). `[fixed by data]`
-- **`input_dropout = 0.0`.** Off by default. Channel dropout simulating
-  electrode failure is a Week 2 experiment, not a training default —
-  enabling it now would confound the baseline. `[judgment call]`
-- **`n_features = 512`.** Not swept above with the others because it
-  isn't tunable at all: 256 threshold-crossing + 256 spike-band-power
-  channels at 20 ms bins, the released HDF5 `input_features` layout, with
-  no patching or stride applied in this version (see the next item).
-  `[fixed by data]`
-- **Plain 512-dim input, no 14-bin/stride-4 concatenation.** The
-  published baseline concatenates 14 consecutive 20 ms bins at stride 4
-  before its GRU (a 7,168-dim input, an effective 80 ms output stride).
-  This version does not — that comparison is an explicit later addition,
-  not an inherited default (`src/b2t_drift/models/gru_ctc.py`'s module
-  docstring, "THE CTC LENGTH CONTRACT"). Because there is no downsampling
-  here, `input_lengths` pass through `GRUCTC.ctc_input_lengths` UNCHANGED;
-  adding stride later requires dividing them first before `nn.CTCLoss`
-  (`CLAUDE.md`'s "known pitfalls" — the single most likely place for a
-  silent bug in this pipeline, since a wrong length corrupts the loss
-  without raising). `ctc_input_lengths` exists specifically so that fix
-  has exactly one place to happen. `[principled]`
-- **`use_day_layers = True`, day layers initialize to IDENTITY.**
-  Confirmed from the pretrained baseline checkpoint
-  (`day_weights.0`..`44`, `day_biases.0`..`44` are identity/zero before
-  session-specific fine-tuning). A session with no trained layer must
-  fall back to a no-op rather than a random projection — this is what
-  makes the Week 3 "how much calibration data does a new day need"
-  question well-posed: zero calibration data corresponds to the
-  identity transform, a meaningful, interpretable baseline, rather than
-  to an arbitrary starting point. `[principled]`
+| Hyperparameter | Value | vs. published baseline | Reason | Tag |
+|---|---|---|---|---|
+| `n_layers` | 3 | 5 | Our Switchboard-only train set (3,150 trials) is much smaller than the baseline's (~8,000); depth is the first thing to cut when data is limited. 3 is also the common floor before RNNs underfit temporal structure. | judgment call — revisit if underfitting |
+| `hidden_size` | 512 | 768 | Same data-budget reason. Matches input dim, keeping the first layer square. | judgment call — sweep this |
+| `dropout` | 0.4 | — | High by general standards, standard in this literature (small, noisy datasets need heavy regularization). | convention |
+| `bidirectional` | False | — | A bidirectional GRU needs the whole utterance before emitting — fine offline, impossible in the real-time system this dataset models (emits a phoneme every 80 ms while still speaking). Causal is the honest default; bidirectional is a legitimate ablation, not the default. | principled |
+| `smoothing_sigma_bins` | 2.0 | — | From the published pipeline (2 bins = 40 ms). Articulatory gestures last ~50–150 ms, so 40 ms of smoothing averages away per-bin variance without blurring the gestures. | principled |
+| `n_classes` | 41 | — | CTC blank (0) + 39 ARPABET phonemes (1–39) + silence (40); verified against `seq_class_ids`. | fixed by data |
+| `input_dropout` | 0.0 | — | Off by default; channel dropout simulating electrode failure is a later ablation, not a training default — enabling it now would confound the baseline. | judgment call |
+| `n_features` | 512 | — | 256 threshold-crossing + 256 spike-band-power channels at 20 ms bins; not tunable. | fixed by data |
+| Input patching | none (plain 512-dim) | 14-bin/stride-4 patching (7,168-dim GRU input, 80 ms output stride) | Not an inherited default — an explicit later comparison. No downsampling here means `input_lengths` pass through `ctc_input_lengths` unchanged; adding stride later requires dividing lengths first, before `nn.CTCLoss` (`CLAUDE.md`'s "known pitfalls"). | principled |
+| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). | principled |
 
-**Memory cost of `DayLayers`.** `weights` is dense, `(n_sessions,
-n_features, n_features)` float32 — at this project's scale (45 sessions,
-512 features), `45 × 512 × 512 × 4 bytes ≈ 47 MB`, a large fraction of
-this model's total parameter count. Not a negligible add-on; sized
-deliberately (`src/b2t_drift/models/day_layers.py`'s module docstring).
+**Memory cost of `DayLayers`.** Dense `(n_sessions, n_features,
+n_features)` float32 — 45×512×512×4 bytes ≈ 47 MB, a large fraction of
+total parameter count. Sized deliberately, not a negligible add-on.
 
-**Per-session freezing (Week 3) uses a gradient hook, not
-`requires_grad`.** `requires_grad` is a per-tensor flag; there is no way
-to mark one session's slice of a single `(n_sessions, ...)` parameter
-tensor as trainable while the rest stay frozen through `requires_grad`
-alone. `DayLayers.freeze_all_except(session_index)` /
-`unfreeze_all()` instead register a gradient hook that zeroes every
-other session's slice at backward time. Caveat recorded in the source:
-Adam's momentum state can still apply a few steps of small, decaying
-residual updates to a newly-frozen slice if that slice had nonzero
-optimizer state before freezing — for an exact freeze, call
-`freeze_all_except` before the fine-tuning optimizer has taken any
-steps, or construct a fresh optimizer for that phase.
-
-### FIXED (2026-09-04): PER is now independent of batch composition
-
-**Bug.** `DayLayers` runs on every timestep of a batch, including the
-zero-padded region `collate_trials` adds past each trial's real length.
-Before this fix, `GRUCTC.forward` did not mask that padding before
-`_smooth`'s depthwise Gaussian convolution ran. Once `DayLayers`' bias has
-moved off its zero initialization (i.e. after any training at all), a
-padded timestep evaluates to `0 @ W + bias = bias` — a NONZERO constant,
-not the zero the collate padding started as — and `_smooth` then mixes
-that leaked constant into the last ~`radius` (6 at the default
-`smoothing_sigma_bins=2.0`) real timesteps of any trial shorter than its
-batch's `max_time`. Since how much padding a trial gets depends on which
-OTHER trials happen to share its batch, **the same trial could decode to
-a different phoneme sequence depending on batch composition alone** —
-silently, since nothing raised.
-
-**Measured, before the fix:** 0.0755 max absolute `log_probs` difference,
-one trial decoded alone versus the same trial padded inside a larger
-batch, for a `DayLayers` with a nonzero (post-training-like) bias — large
-enough to flip a marginal argmax (i.e. large enough to change which
-phoneme gets decoded, not just perturb a probability by a harmless
-amount). A freshly constructed (identity-init) model showed ~0 difference
-in the same test, which is what first pinned the mechanism down to
-`DayLayers`' bias specifically, not the smoothing convolution itself (see
-`src/b2t_drift/models/gru_ctc.py`'s `_smooth` docstring for the full
-derivation).
-
-**The fix.** `GRUCTC.forward` now zeros every timestep at or past each
-item's `input_lengths[i]` immediately after `DayLayers` and before
-`_smooth` — `input_lengths` is now a MANDATORY `forward` argument
-(`ValueError` if omitted, not a silent skip: silent batch-dependence is
-worse than an explicit failure, and every real call site
-(`training/loop.py`) has `collate_trials`'s `"input_lengths"` available).
-With padding zeroed before `DayLayers`' output ever reaches `_smooth`,
-collate's explicit zero-padding and `F.conv1d`'s own implicit zero
-edge-padding are genuinely identical inputs to the convolution again,
-regardless of what `DayLayers` has learned.
-
-**Measured, after the fix:** both cases now measure at floating-point
-noise level — `4.77e-7` (fresh) and `9.54e-7` (trained) — comfortably
-below the `1e-5` threshold
-(`tests/test_gru_ctc.py::test_smoothing_batch_composition_sensitivity_below_threshold_after_fix`).
-**PER is now provably independent of batch composition**: a trial's
-decoded sequence, and therefore its contribution to PER, no longer
-depends on which other trials happened to share its evaluation batch.
+**Per-session freezing uses a gradient hook, not `requires_grad`**, since
+`requires_grad` can't mark one session's slice of a shared
+`(n_sessions, ...)` tensor trainable while the rest stay frozen —
+`DayLayers.freeze_all_except(session_index)` / `unfreeze_all()` register a
+backward-time hook instead. Caveat: Adam's momentum can still apply a few
+steps of decaying updates to a newly-frozen slice if it had nonzero
+optimizer state before freezing — freeze before the fine-tuning
+optimizer's first step, or use a fresh optimizer for that phase.
 
 ---
 
-## 14. Migration: H: (HDD) -> D: (SSD), and corrected dataloader numbers (2026-09-04)
+## 11. Stated limitations
 
-**The move.** Repo relocated from `H:\dev\bci_speech_decoding\b2t-drift`
-(spinning HDD) to `D:\dev\b2t-drift` (SATA SSD), via `scratch/migrate.ps1`
-(gitignored, one-off). **Reason:** section 8's full-scale dataloader
-measurement found 74% of every steady-state training epoch was spent
-waiting on the dataloader at `num_workers=2`, attributed to seek latency
-on scattered small HDF5 reads across the 45-session, per-session-file
-layout — a spinning-disk-specific cost, not a fundamental property of the
-data pipeline. Post-move verification: `git rev-parse HEAD` unchanged
-(`956fc97...`), `git status --short` shows only the pre-existing
-`?? sessions.txt`, `uv run pytest` reproduces the pre-move 179-passed
-baseline exactly (only with `uv sync --extra tensorboard` — see the
-caveat below), all 45 session folders and both `data/external/` files
-present, `00_verify_data.py` reproduces the exact pre-move trial counts
-(10,948 total: 8,072/1,426/1,450), and a spot-read of one HDF5 trial's
-`input_features` came back full shape, correct dtype, no NaNs. Zero
-stale `H:\`/`bci_speech_decoding`/`My Drive` references anywhere in
-tracked project files (only two expected non-issues elsewhere: a
-coincidental `"H:\n"` print in a third-party `.venv` test file, and
-`scratch/migrate.ps1` itself plus a stale pre-move log, both gitignored
-and intentionally referencing the old path for operational history).
+- **Single participant.** Everything here is one person's brain. Nothing
+  generalizes across subjects.
+- **All results offline.** Closed-loop performance differs — the
+  participant adapts to the decoder's behavior in real use, and nothing
+  here captures that adaptation.
+- **Speaking strategy is unrecoverable.** Some blocks are vocalized, some
+  silent speech; the authors don't publish which, so it can't be
+  controlled for.
+- **Test partitions are unlabeled.** 1,450 trials (13%) are unusable for
+  supervised work.
+- **Normalization is sentence-indexed, not time-indexed.** Sessions with
+  the same day-offset don't necessarily have the same number of
+  normalization-window updates (median ~42 trials/block,
+  `docs/FINDINGS.md`). Check whether per-session PER correlates with
+  session trial count before attributing an effect to elapsed time.
+- **The first ~20 sentences of each session are normalized on a
+  still-filling window** and are noisier as a result. Elevated PER there
+  is expected to be a normalization artifact, not drift — see section 12
+  for the resulting warm-up-trials decision.
+- **ALS progression may change what the participant can attempt to
+  articulate, independent of electrode health — indistinguishable from
+  electrode degradation in this dataset.** Neither this dataset nor this
+  project's design can resolve that ambiguity; state it alongside any
+  drift-curve result.
+- **Sentence length correlates with session date; Switchboard-only
+  reduces but does not eliminate this confound.** Session level (n=45):
+  Pearson r=0.27 (p=0.074, n.s.) but Spearman ρ=0.47 (p=0.0012) — driven
+  by several much-shorter 50-Word-corpus sessions scattered
+  non-monotonically through the timeline (train median seq_len 26.0 vs.
+  28.25 for the 30 held-out sessions). Trial level, Switchboard only
+  (n=6,491): still a significant, weak upward trend (r=0.137,
+  p=1.3e-28). **Verdict: mild-to-moderate, not eliminated by
+  Switchboard-only alone** — report per-session median seq_len alongside
+  PER on every drift curve (`figures/sentence_length_over_time.png`).
 
-**Caveat found during rebuild, not a migration defect.** Plain `uv sync`
-installs 177 passed / 1 failed / 1 skipped, not 179 passed — the failure
-(`test_provenance.py::test_capture_provenance_tensorboard_version_present_when_installed`)
-and the skip (`test_logging.py`) both require the optional `tensorboard`
-extra (`pyproject.toml`), which plain `uv sync` never installs. Confirmed
-by installing it (`uv sync --extra tensorboard`): the suite is then a
-clean 179 passed. This is an environment/extras gap, not something the
-move broke — worth noting because whoever next runs `uv sync` on a fresh
-checkout needs `--extra tensorboard` (or `--extra tracking`) to match the
-documented 179 baseline.
+---
 
-**Disk throughput (Task 4).** 200 randomly sampled trials' `input_features`
-read cold across 5 session files (`t15.2025.01.12`, `t15.2023.09.03`,
-`t15.2023.08.13`, `t15.2023.11.03`, `t15.2023.10.20`): 329.35 MB in 0.886s
--- **371.7 MB/s, 4.43 ms/trial**. Against the pre-move HDD baseline of
-70-93 ms/trial, that is a **~16-21x speedup**. (Context: this machine has
-~17 GB RAM against a 13 GB dataset, so the *entire* dataset could in
-principle be page-cache-resident after enough passes -- this particular
-200-trial/5-file read was each file's first touch this session, so it is
-a genuine cold SSD number, not a cache artifact; see the methodology note
-below for why this distinction matters.)
+## 12. Open decisions before Week 1
 
-**Training throughput re-sweep (Task 5).** 3 real epochs,
-`temporal_s01_s15_switchboard` (3,150 train / 351 val trials, 98
-train batches/epoch, `GRUCTC` default hyperparameters), `num_workers` in
-{0, 1, 2, 4}, measured with the same non-invasive `TimedDataLoader`
-wrapper as the original HDD probe (`scratch/measure_timing_sweep.py`,
-generalizing `scratch/measure_timing.py`/`measure_timing_nw4.py`):
+Decisions made — and recorded here — before any implementation in
+`src/b2t_drift/data`/`models`/`training`, and (for anything touching
+evaluation) before looking at any PER value, per section 7's validation
+rule.
 
-| num_workers | epoch | seconds (train+val) | dataloader wait | train_loss | val_per |
-|---|---|---:|---:|---:|---:|
-| 0 | 0 | 71.93 | 14.67s (20.4%) | 12.4885 | 0.8223 |
-| 0 | 1 | 67.22 | 14.47s (21.5%) | 3.1021 | 0.7782 |
-| 0 | 2 | 62.33 | 15.47s (24.8%) | 3.0548 | 0.8080 |
-| 1 | 0 | 55.51 | 0.17s (0.3%) | 12.4703 | 0.8264 |
-| 1 | 1 | 49.00 | 0.21s (0.4%) | 3.1765 | 0.7569 |
-| 1 | 2 | 42.92 | 0.38s (0.9%) | 2.9911 | 0.7511 |
-| 2 | 0 | 59.15 | 0.21s (0.4%) | 12.4506 | 0.8473 |
-| 2 | 1 | 48.97 | 0.28s (0.6%) | 3.1318 | 0.7550 |
-| 2 | 2 | 41.86 | 0.39s (0.9%) | 3.0401 | 0.7501 |
-| 4 | 0 | 65.36 | 0.31s (0.5%) | 12.4561 | 0.8601 |
-| 4 | 1 | 48.91 | 0.38s (0.8%) | 3.0827 | 0.7408 |
-| 4 | 2 | 43.12 | 0.71s (1.6%) | 3.0320 | 0.7511 |
+**Warm-up trials: DECIDED — keep all trials, exclude none.**
 
-Peak GPU memory: **1749.7 MB for every configuration** (num_workers
-affects the host-side pipeline only, not model memory; consistent with
-section 8's independently-measured 1.75 GB figure).
-
-**Against the pre-move baseline (292.8 s/epoch at `num_workers=2`, 74%
-dataloader wait): the dataloader is no longer the bottleneck at any
-`num_workers >= 1`.** Steady-state (epoch 3 of 3) wait fraction is under
-2% for `num_workers` in {1, 2, 4} and 24.8% even at `num_workers=0` --
-comfortably under the 40% concern threshold in every configuration. **The
-SSD alone resolved the bottleneck; the packed-cache work is not needed.**
-**Fastest measured: `num_workers=2`** (41.86s steady-state), but
-`num_workers=1` (42.92s) and `num_workers=4` (43.12s) are within ~3% of
-it -- statistically indistinguishable from a single 3-epoch run each.
-**The bottleneck is now GPU compute, not I/O**: any worker count >= 1
-fully overlaps loading with compute (wait time collapses from ~15s/epoch
-to well under 1s), and adding more workers past 1 buys nothing further
-because there is no more I/O time left to hide. `num_workers=0` remains
-measurably slower (62.33s, ~49% slower than `num_workers=2`) because
-without a background worker, loading and compute cannot overlap at all --
-this contradicts the pre-sweep hypothesis that IPC overhead might make
-`num_workers=0` competitive on an SSD; it does not, because the benefit
-of overlap does not depend on drive speed. `configs/experiment/switchboard_baseline.yaml`'s
-`num_workers` is updated to **2** on this evidence.
-
-**Methodology note: why a small-item-set DataLoader benchmark does not
-measure the same thing as real training.** Checked whether a "1.1
-ms/item" figure exists anywhere in this repo's history to cite as the
-original small-benchmark number -- it does not (`scratch/benchmark_dataloader.py`
-recorded ms/batch, not ms/item, and no script or doc mentions 1.1 ms/item
-specifically); rather than repeat an unverifiable number, `scratch/verify_dataset.py`
-(200 items, ONE session, `num_workers=0`) was re-run today and measures
-**2.43 ms/item** on the SSD -- still well below the real, full-epoch
-per-trial cost, but far closer to it than the same comparison would have
-been on the HDD. The general point holds regardless of drive: a benchmark
-that reads a small item set from a single session file will, to some
-degree, be warmed by the OS page cache and never touches the seek-cost
-(HDD) or open/close overhead (any drive) of walking many *distinct*
-files. Real training on `temporal_s01_s15_switchboard` walks 3,150
-distinct trials across 14 session files every epoch -- a categorically
-different access pattern. On the HDD this gap was enormous (a small
-in-cache benchmark vs. 70-93 ms/trial in real training); on the SSD the
-gap has shrunk dramatically (2.43 ms/item small-benchmark vs. ~4.43
-ms/trial cold real-file reads, Task 4) because SSDs are far less sensitive
-to random/scattered access than HDDs are to seek latency -- but the
-underlying methodological point is unchanged: **a benchmark that does not
-reproduce the real access pattern measures something else**, which is why
-this section's throughput numbers all come from the real
-`temporal_s01_s15_switchboard` split, not a small proxy set.
-
-**Corrected sweep time estimate, replacing the stale "~6 hours for all
-four runs" (and superseding the HDD-era 18.76h/25.50h correction
-above).** Extrapolating `num_workers=2`'s measured 41.86 s/epoch
-steady-state linearly by train-batch count (as section 8's own table
-did), using the same 28/65/98/104 batches/epoch for s01-s05/s10/s15/s20:
-
-| cut | train batches/epoch | s/epoch @ nw=2 (SSD) | 100 epochs |
-|---|---|---:|---:|
-| s01-s05 | 28 | 12.0s | 0.33h |
-| s01-s10 | 65 | 27.7s | 0.77h |
-| s01-s15 | 98 | 41.9s | 1.16h |
-| s01-s20 | 104 | 44.4s | 1.23h |
-| **all four, summed** | | | **3.50h** |
-
-Same caveat as before applies: `patience=5` will likely stop most runs
-well short of 100 epochs in practice, so 3.50h is an upper bound, not an
-expected runtime.
-
-**The patience inconsistency, checked and found not to exist.** The task
-that prompted this migration report asked to reconcile "the config
-comment says 10, a prior report referenced 5." Searched the entire
-tracked repo (config, source, tests, docs, git history including the
-`switchboard_baseline.yaml` file's original commit): `patience: 5` is
-the only production value anywhere, and it has been 5 since the config
-was first committed -- it already matches this document's own citation
-above ("`patience=5` (the configured default)"). The only literal `10`
-found is `tests/test_loop.py`'s `patience=10`, an arbitrary sentinel
-chosen purely to guarantee early stopping never triggers within that
-test's own 3-epoch run -- it does not claim to represent, and does not
-conflict with, the production default. No inconsistency to fix; recorded
-here so the claim is not repeated without evidence in the future.
-
-**mlruns/ and future moves.** `training/logging.py`'s `MLflowLogger`
-defaults to a local file store (`file:./mlruns`). MLflow has not
-actually been run in this project yet (no `mlruns/` directory exists),
-but once it is, MLflow bakes each run's **absolute** artifact path into
-its own metadata at creation time -- unlike `runs/` or `data/`, a plain
-copy/move of `mlruns/` to a new machine or path leaves every run pointing
-at a directory that no longer exists. Added `mlruns/` to `.gitignore`
-now (it was missing, so a first MLflow-enabled run could otherwise have
-been added to git by accident). If the repo moves again and MLflow has
-been used by then, `mlruns/` needs the same treatment `scratch/migrate.ps1`
-gave `.venv` this time -- i.e. don't carry it across as-is; either delete
-and let new runs recreate it, or re-point it via MLflow's own path-
-migration tooling, not a raw file copy.
+- *Case against keeping them:* the first ~20 trials of each session are
+  normalized on a partially-filled window (as few as 1 prior sentence)
+  and are noisier as a result (section 11).
+- *Case for keeping them, which won:* excluding them discards data from
+  already-small sessions (as few as 80 trials); the exclusion threshold N
+  would itself be an arbitrary, undocumented parameter; and every session
+  is affected equally by this window-filling effect regardless of its
+  calendar date, so it cannot masquerade as drift — at worst it adds
+  uniform noise, not a directional bias.
+- **Consequence:** expect noisier per-trial behavior at the start of each
+  session's evaluated trials; the mandatory bootstrap confidence
+  intervals (section 7) account for this rather than trial exclusion.

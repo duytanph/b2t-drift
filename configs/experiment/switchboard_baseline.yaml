@@ -1,5 +1,5 @@
 # Baseline training experiment: GRUCTC at its documented default
-# hyperparameters (docs/DESIGN.md section 13, "Model hyperparameters"),
+# hyperparameters (docs/DESIGN.md section 10, "Model hyperparameters"),
 # trained on one of the Switchboard cut-point sweep's split manifests.
 #
 # The split manifest itself is NOT referenced here -- it's passed
@@ -12,13 +12,13 @@ experiment_name: switchboard_baseline
 data_config: configs/data/t15.yaml
 
 model:
-  hidden_size: 512          # docs/DESIGN.md section 13: [judgment call -- sweep this]
-  n_layers: 3                # docs/DESIGN.md section 13: [judgment call -- revisit if the baseline underfits]
-  dropout: 0.4                # docs/DESIGN.md section 13: [convention]
-  bidirectional: false        # docs/DESIGN.md section 13: [principled]
-  use_day_layers: true        # docs/DESIGN.md section 13: [principled]
-  input_dropout: 0.0          # docs/DESIGN.md section 13: [judgment call]
-  smoothing_sigma_bins: 2.0   # docs/DESIGN.md section 13: [principled]
+  hidden_size: 512          # docs/DESIGN.md section 10: [judgment call -- sweep this]
+  n_layers: 3                # docs/DESIGN.md section 10: [judgment call -- revisit if the baseline underfits]
+  dropout: 0.4                # docs/DESIGN.md section 10: [convention]
+  bidirectional: false        # docs/DESIGN.md section 10: [principled]
+  use_day_layers: true        # docs/DESIGN.md section 10: [principled]
+  input_dropout: 0.0          # docs/DESIGN.md section 10: [judgment call]
+  smoothing_sigma_bins: 2.0   # docs/DESIGN.md section 10: [principled]
 
 training:
   # Every value below is a reasonable starting point chosen by ordinary
@@ -34,21 +34,16 @@ training:
   learning_rate: 0.001
   grad_clip: 1.0               # matches training/loop.py's train_one_epoch default
   amp: true                    # only actually used when a CUDA device is available -- see scripts/02_train.py
-  num_workers: 2                 # REVISED 2026-09-04, post-migration H:(HDD)->D:(SSD) (docs/DESIGN.md section 14).
-                                  # The HDD-era numbers above (num_workers=2 spending 62-74% of epoch time waiting on
-                                  # the dataloader) do NOT hold on the SSD. Re-measured for real: 3 epochs on the full
-                                  # 3,150-trial s01-s15 Switchboard train set, num_workers in {0,1,2,4}. Steady-state
-                                  # (epoch 3 of 3) epoch time (train+val) / dataloader-wait fraction:
+  num_workers: 2                 # docs/DESIGN.md section 8; full measurement history in docs/FINDINGS.md
+                                  # ("num_workers benchmarking", "SSD migration"). Steady-state (3rd epoch)
+                                  # epoch time / dataloader-wait fraction on the current SSD:
                                   #   num_workers=0: 62.3s / 24.8%   num_workers=1: 42.9s / 0.9%
                                   #   num_workers=2: 41.9s / 0.9%    num_workers=4: 43.1s / 1.6%
-                                  # Any num_workers >= 1 fully hides I/O behind GPU compute on the SSD; num_workers=0
-                                  # is the only configuration where the dataloader is still a real cost (~25%, still
-                                  # under the 40% concern threshold). 1/2/4 are statistically indistinguishable from
-                                  # each other (within ~3% of one another) -- the bottleneck is now GPU compute, not
-                                  # I/O. num_workers=2 measured marginally fastest and is kept as the default, leaving
-                                  # more CPU headroom than 4 for no measured cost. persistent_workers=True and
-                                  # pin_memory=True are set in scripts/02_train.py whenever num_workers > 0, not
-                                  # configurable from here.
+                                  # Any num_workers >= 1 fully hides I/O behind GPU compute; 1/2/4 are within ~3%
+                                  # of each other (bottleneck is now GPU compute, not I/O). num_workers=2 measured
+                                  # marginally fastest and leaves more CPU headroom than 4. persistent_workers=True
+                                  # and pin_memory=True are set in scripts/02_train.py whenever num_workers > 0,
+                                  # not configurable from here.
 
 logging:
   wandb_project: b2t-drift

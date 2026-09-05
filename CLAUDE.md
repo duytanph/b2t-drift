@@ -34,3 +34,21 @@ Guidance for working in this repository.
 - Do not invent dataset details. The HDF5 structure has not been inspected
   yet — treat any assumption about field names, shapes, or session metadata
   as a TODO until confirmed against the real files.
+
+## Documentation
+
+`docs/DESIGN.md` holds durable decisions and their justifications. It
+states what is true now and why, with no chronology. Target length is
+under 400 lines; if it exceeds that, content belongs elsewhere.
+
+`docs/FINDINGS.md` holds the dated empirical record — investigations,
+measurements, and what each changed. Append-only. Entries are titled by
+what was found, never by task number.
+
+`docs/DATASET.md` holds facts about the data itself.
+
+When recording work: a DECISION goes to DESIGN.md, a MEASUREMENT goes to
+FINDINGS.md. Most work produces both — record the decision briefly in
+DESIGN.md and link to the FINDINGS.md entry for the evidence. Never
+record local machine state, drive paths, or environment troubleshooting
+in either; those go to README.md if reproducible and nowhere if not.

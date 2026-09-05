@@ -28,6 +28,15 @@ uv sync
 Requires Python >=3.11 and a CUDA-capable GPU (see `pyproject.toml` for the
 PyTorch CUDA index configuration).
 
+Plain `uv sync` installs only the base dependencies and yields **177
+passed / 1 failed / 1 skipped** under `uv run pytest` — one test and one
+skip require the optional `tensorboard` extra. To match the documented
+**179-passed** baseline, run:
+
+```bash
+uv sync --extra tensorboard   # or --extra tracking for wandb+tensorboard+mlflow
+```
+
 ### Data
 
 This repo does not include the dataset. `data/` is gitignored and must be
