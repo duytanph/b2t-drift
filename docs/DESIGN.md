@@ -257,17 +257,19 @@ code and for inspecting its learned per-session day-layers.
   sentence length (a narrow duration band per batch, not a uniform
   sample) — standard practice in speech recognition, not a bug.
 - **DataLoader: `num_workers=2`, `persistent_workers=True`,
-  `pin_memory=True`.** Determined by three rounds of benchmarking at
-  increasing realism, the first two of which reached the wrong conclusion
-  at small/synthetic scale (`docs/FINDINGS.md`: "num_workers
-  benchmarking"). **Methodology lesson:** an early benchmark reported ~1
-  ms/item by re-reading a small, single-session set resident in the OS
-  page cache; real training walks 3,150 distinct trials across 14 files
-  and measured 70–93 ms/item on the HDD — a benchmark that doesn't
-  reproduce the real access pattern measures something else. An SSD
-  migration resolved the bottleneck entirely (`docs/FINDINGS.md`: "SSD
-  migration") — dataloader wait is now under 2% of epoch time at
-  `num_workers >= 1`; GPU compute is now the dominant cost.
+  `pin_memory=True`.** Two rounds of synthetic benchmarking picked wrong
+  values that didn't survive contact with real data; only a real
+  measurement against the actual dataset settled it, and moving the
+  dataset to an SSD — not a `num_workers` change — is what actually
+  resolved the bottleneck (`docs/FINDINGS.md`: "Storage medium, not
+  DataLoader configuration, was the training bottleneck"). **Methodology
+  lesson:** a benchmark must reproduce the real access pattern (many
+  distinct files, real variable lengths, no page-cache reuse) or it
+  measures something else — an early benchmark reported ~1 ms/item on a
+  small, cache-resident single-session set; real training walks 3,150
+  distinct trials across 14 files and measured 70–93 ms/item on the
+  original spinning disk. Dataloader wait is now under 2% of epoch time
+  at `num_workers >= 1`; GPU compute is the dominant cost.
 - **Normalization is already applied upstream** — a rolling per-channel,
   per-sentence window, NOT per-block/session/global
   (`docs/DATASET.md` section 9 item 7). `data/normalize.py` must not
@@ -277,7 +279,8 @@ code and for inspecting its learned per-session day-layers.
   architecture (5 layers, 1024 hidden) trains with no OOM risk even at
   batch=64 (`docs/FINDINGS.md`: "GPU compute is not a constraint");
   real-training peak VRAM for the actual small/default config is 1.75 GB
-  (`docs/FINDINGS.md`: "SSD migration"). No need to shrink the model to
+  (`docs/FINDINGS.md`: "Storage medium, not DataLoader configuration...").
+  No need to shrink the model to
   fit a GPU memory budget.
 - **PER is independent of batch composition.** `GRUCTC.forward` zeros
   every padded timestep immediately after `DayLayers` and before the
@@ -390,9 +393,10 @@ optimizer's first step, or use a fresh optimizer for that phase.
 
 ---
 
-## 12. Open decisions before Week 1
+## 12. Decisions fixed in advance
 
-Decisions made — and recorded here — before any implementation in
+A standing record of decisions made — and recorded here — before the
+evidence that could have biased them: before any implementation in
 `src/b2t_drift/data`/`models`/`training`, and (for anything touching
 evaluation) before looking at any PER value, per section 7's validation
 rule.

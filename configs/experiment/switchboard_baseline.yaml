@@ -35,8 +35,8 @@ training:
   grad_clip: 1.0               # matches training/loop.py's train_one_epoch default
   amp: true                    # only actually used when a CUDA device is available -- see scripts/02_train.py
   num_workers: 2                 # docs/DESIGN.md section 8; full measurement history in docs/FINDINGS.md
-                                  # ("num_workers benchmarking", "SSD migration"). Steady-state (3rd epoch)
-                                  # epoch time / dataloader-wait fraction on the current SSD:
+                                  # ("Storage medium, not DataLoader configuration, was the training
+                                  # bottleneck"). Steady-state (3rd epoch) epoch time / dataloader-wait fraction:
                                   #   num_workers=0: 62.3s / 24.8%   num_workers=1: 42.9s / 0.9%
                                   #   num_workers=2: 41.9s / 0.9%    num_workers=4: 43.1s / 1.6%
                                   # Any num_workers >= 1 fully hides I/O behind GPU compute; 1/2/4 are within ~3%

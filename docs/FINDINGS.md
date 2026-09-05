@@ -96,11 +96,19 @@ No OOM at batch 32 or 64 in any configuration (batch=64 peak 6.1 GB,
 baseline/fp32/no-downsampling). fp16 roughly halves step time (Turing has
 no native bf16). The official baseline's real architecture (patched
 input, GRU dim 7,168) is not directly comparable to this 512-dim grid.
+The fp16 timings above were measured without a `torch.amp.GradScaler` —
+acceptable for a pure speed benchmark on random targets, but a real fp16
+training run needs one to avoid silent gradient underflow.
 
 **Consequence:** No GPU-driven reason to shrink the model or the
 four-cut-point sweep (`docs/DESIGN.md` section 7) — the sweep's real
 bottleneck turned out to be the dataloader, not GPU compute (see
-"SSD migration" below).
+"Storage medium, not DataLoader configuration..." below). Confirmed
+`scripts/02_train.py` actually constructs a `GradScaler` whenever
+`amp: true` (the configured default,
+`configs/experiment/switchboard_baseline.yaml`) and `train_one_epoch`
+uses it to scale/unscale before clipping and stepping — this benchmark's
+missing-GradScaler caveat does not apply to real training runs.
 
 ---
 
@@ -349,38 +357,41 @@ best.
 
 ---
 
-### num_workers benchmarking: synthetic tests picked the wrong value twice before real-scale data settled it (2026-09-03 to 2026-09-04)
+### Storage medium, not DataLoader configuration, was the training bottleneck (2026-09-03 to 2026-09-04)
 
-**Question:** What `num_workers` DataLoader setting is fastest?
+**Question:** What `num_workers` setting is fastest, and can it be tuned
+from a synthetic benchmark?
 
-**Method:** Three rounds of benchmarking at increasing realism: (1) 200
-synthetic items; (2) 2,048 synthetic fixed-length items at batch_size=32,
-marginal ms/batch after excluding the first 100 as warmup; (3) the real
-3,150-trial `temporal_s01_s15_switchboard` train set, 3 real epochs, on
-the original HDD.
+**Method:** Two rounds of synthetic DataLoader benchmarking, then a real
+measurement on the full 3,150-trial `temporal_s01_s15_switchboard` train
+set (3 real epochs, `num_workers` in {0, 1, 2, 4}) — first on the
+original spinning disk, then again after the dataset was moved to an
+SSD.
 
-**Result:** Round 1 concluded `num_workers=0` was fastest — wrong:
-Windows `spawn` worker-startup overhead (~1–2s, paid once) swamped the
-signal at that scale. Round 2 found `num_workers=0`: 380 ms/batch,
-`num_workers=2`: 35 ms/batch, `num_workers=4`: 27 ms/batch — against a
-~230 ms/step fp16 compute budget, `num_workers=0` clearly fails and
-`num_workers=2` was chosen (comfortably under budget, more CPU headroom
-than 4). Round 3 (real data, batch_size=32, 98 batches/epoch) found round
-2's synthetic conclusion did not hold at real scale: `num_workers=2`
-still spent 74% of steady-state epoch time waiting on the dataloader
-(217.4s of 292.8s); `num_workers=4` cut steady-state epoch time ~29%
-(317.2s → 224.3s, comparing each config's own 2nd epoch) but only reduced
-wait to 68.5% (153.6s of 224.3s) — still the dominant cost. Real
-per-trial HDF5 read cost, CPU contention, and untested higher worker
-counts were flagged as candidate causes, not resolved.
+**Result:** Round 1 (200 synthetic items) picked `num_workers=0` —
+wrong: Windows `spawn` worker-startup overhead swamped the signal at
+that scale. Round 2 (2,048 synthetic fixed-length items) measured 35
+ms/batch at `num_workers=2`, concluding it cleared the ~230 ms/step fp16
+compute budget — also wrong at real scale: that same config still spent
+74% of steady-state epoch time waiting on the dataloader (217.4s of
+292.8s). Disk read before/after the storage change: 70–93 ms/trial vs.
+4.43 ms/trial, 371.7 MB/s. Steady-state epoch time at `num_workers=2`
+before/after: 292.8s at 74% wait vs. 41.9s at under 1% wait. Post-move
+`num_workers` comparison (3rd epoch): 0 → 62.33s (24.8% wait), 1 →
+42.92s (0.9%), 2 → 41.86s (0.9%), 4 → 43.12s (1.6%) — 1/2/4 effectively
+tied, 0 slower because loading and compute no longer overlap. Peak GPU
+memory unchanged at 1749.7 MB across every configuration.
 
-**Consequence:** `num_workers` default revised to 4 on this HDD evidence
-— later superseded by the SSD migration entry below, which revises it
-back to 2 for an unrelated reason (I/O is no longer the bottleneck at
-all). This history is why `docs/DESIGN.md` section 8 states a
-methodology rule: a benchmark must reproduce the real access pattern
-(many distinct files, real variable lengths) or it measures something
-else.
+**Consequence:** A benchmark must reproduce the real access pattern —
+many distinct files, real variable lengths, no page-cache reuse — or it
+measures something else; both synthetic rounds passed a scale test but
+failed the access-pattern test. `num_workers=2` is the config default;
+I/O is no longer the bottleneck at any `num_workers >= 1`, so no further
+(e.g. packed-cache) dataloader work is needed. Extrapolating the
+`num_workers=2` rate linearly by train-batch count across all four cut
+points: 3.50h for 100 epochs of every cut point, summed — superseding
+the earlier 18.76–25.50h estimate and the original GPU-compute-only
+"~6 hours" estimate.
 
 ---
 
@@ -409,37 +420,3 @@ forward argument): 4.77e-7 (fresh) and 9.54e-7 (trained), both below the
 
 **Consequence:** PER is now provably independent of batch composition
 (`docs/DESIGN.md` section 8).
-
----
-
-### SSD migration: dataloader wait drops from 74% to under 2% (2026-09-04)
-
-**Question:** Does moving the dataset from a spinning HDD to a SATA SSD
-resolve the dataloader bottleneck measured in the num_workers entry
-above?
-
-**Method:** Re-ran the same real-data throughput and epoch-timing
-measurements post-migration: 200 random trials' `input_features` read
-cold across 5 session files; 3 real epochs on the full 3,150-trial
-`temporal_s01_s15_switchboard` train set at `num_workers` in {0, 1, 2,
-4}, using the same non-invasive dataloader-wait-timing method as the
-original HDD probe.
-
-**Result:** Disk read: 371.7 MB/s, 4.43 ms/trial (vs. 70–93 ms/trial on
-the HDD — a ~16–21x speedup). Steady-state (3rd epoch) training:
-`num_workers=2` dropped from 292.8 s/epoch at 74% dataloader wait (HDD)
-to 41.9 s/epoch at under 1% wait (SSD); wait fraction is under 2% for
-`num_workers` in {1, 2, 4} and 24.8% even at `num_workers=0`. Fastest
-measured: `num_workers=2` (41.86s), with 1 (42.92s) and 4 (43.12s) within
-~3% — effectively tied. `num_workers=0` is clearly slower (62.33s)
-because loading and compute no longer overlap at all. Peak GPU memory
-unchanged at 1749.7 MB for every configuration. Extrapolating the
-`num_workers=2` rate linearly by train-batch count across all four
-cut points: **3.50h for 100 epochs of every cut point, summed** (vs. the
-earlier HDD-era estimate of 18.76–25.50h, and the original
-GPU-compute-only "~6 hours" estimate, both now stale).
-
-**Consequence:** The dataloader is no longer the bottleneck at any
-`num_workers >= 1`; no further (e.g. packed-cache) dataloader work is
-needed. `configs/experiment/switchboard_baseline.yaml`'s `num_workers`
-default updated to 2 (`docs/DESIGN.md` section 8).
