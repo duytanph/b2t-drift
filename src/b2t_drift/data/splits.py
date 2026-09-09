@@ -315,6 +315,7 @@ def build_temporal_split(
 
     return {
         "name": name,
+        "kind": "temporal",
         "created_by": CREATED_BY,
         "created_at": datetime.now(UTC).isoformat(),
         "git_commit": _git_commit_hash(),
@@ -328,6 +329,64 @@ def build_temporal_split(
         "train": train_refs,
         "val": val_refs,
         "eval_sessions": eval_sessions,
+    }
+
+
+def build_official_split(data_root: Path) -> dict[str, Any]:
+    """Build the OFFICIAL split manifest -- every session's own released
+    `data_train.hdf5` trials as `"train"`, every session's own
+    `data_val.hdf5` trials as `"val"`, ALL CORPORA (no `corpus_filter`), no
+    `eval_sessions`.
+
+    EXISTS ONLY FOR MODEL A (`docs/DESIGN.md` section 3): a pipeline
+    correctness check against the released pretrained checkpoint's
+    published `val_PER=0.101` (`docs/FINDINGS.md`: "Block count decreases
+    over the recording..."), never for drift measurement. Every session
+    contributes to BOTH train and val here -- there is no temporal holdout
+    at all (`docs/DATASET.md` sections 12-13: this is exactly why the
+    official split cannot measure drift). Marked `"kind": "official"` so
+    `validate_split` skips the cut-date / non-empty-`eval_sessions` checks
+    that only make sense for a `build_temporal_split` manifest (marked
+    `"kind": "temporal"`) -- those checks protect the drift manifests'
+    temporal-extrapolation guarantee, which this manifest deliberately does
+    not have, rather than being loosened for everyone.
+
+    Args:
+        data_root: Directory containing per-session subdirectories.
+
+    Returns:
+        A dict with `name="official"`, `kind="official"`, `created_by`,
+        `created_at`, `git_commit`, `corpus_filter=None`,
+        `session_to_index` (all 45 sessions, contiguous indices 0-44, same
+        by-date-order convention as `build_temporal_split` -- required so
+        this manifest is interchangeable with a temporal one anywhere only
+        `session_to_index` is read), `train`/`val` (trial references,
+        `[session_id, partition, trial_key]`, all corpora), and
+        `eval_sessions=[]` (present but empty, for schema symmetry with
+        `build_temporal_split`'s output -- nothing here uses it).
+    """
+    sessions = discover_sessions(data_root)
+    session_to_index = {s.session_id: i for i, s in enumerate(sessions)}
+
+    train_refs: list[list[str]] = []
+    val_refs: list[list[str]] = []
+    for session in sessions:
+        for trial_id in iter_trial_ids(data_root, session.session_id, partitions=("train",)):
+            train_refs.append([trial_id.session_id, trial_id.partition, trial_id.trial_key])
+        for trial_id in iter_trial_ids(data_root, session.session_id, partitions=("val",)):
+            val_refs.append([trial_id.session_id, trial_id.partition, trial_id.trial_key])
+
+    return {
+        "name": "official",
+        "kind": "official",
+        "created_by": CREATED_BY,
+        "created_at": datetime.now(UTC).isoformat(),
+        "git_commit": _git_commit_hash(),
+        "corpus_filter": None,
+        "session_to_index": session_to_index,
+        "train": train_refs,
+        "val": val_refs,
+        "eval_sessions": [],
     }
 
 
@@ -503,29 +562,52 @@ def validate_split(
             a default: the strict default forces it to be made
             explicitly, by passing `allow_empty_eval_sessions=True`,
             rather than silently proceeding with a curve point that has
-            nothing behind it.
+            nothing behind it. Only consulted when `split_dict["kind"]`
+            (or the default, see below) is `"temporal"` -- meaningless for
+            an `"official"` manifest, which has no eval sessions at all.
+
+    `split_dict["kind"]` (`"temporal"` or `"official"`, default `"temporal"`
+    if the key is absent -- every manifest `build_temporal_split` wrote
+    before this field existed is a `"temporal"` manifest, so the default
+    keeps validating them unchanged) selects which checks below apply.
+    `"official"` (`build_official_split`'s output) has no cut date and no
+    eval sessions by design (`docs/DATASET.md` sections 12-13: every
+    session contributes to both train and val, so there is no temporal
+    holdout to check) -- rather than loosening the checks that protect the
+    drift manifests' temporal-extrapolation guarantee, the cut-date and
+    eval-sessions checks below are simply skipped for `"official"`.
 
     Raises:
         ValueError: On the first of the following that fails, naming the
             specific offending session or trial rather than just stating
             that a problem was found:
-              - `train`, `val`, or `eval_sessions` is empty
-              - an eval session has `n_trials == 0` (unless
-                `allow_empty_eval_sessions=True`)
+              - `kind` (or its default) is not `"temporal"` or `"official"`
+              - `train` or `val` is empty
+              - `kind="temporal"` and `eval_sessions` is empty
+              - `kind="official"` and `eval_sessions` is non-empty
+              - (`kind="temporal"` only) an eval session has `n_trials == 0`
+                (unless `allow_empty_eval_sessions=True`)
               - a session appears in both train/val and `eval_sessions`
-              - any eval session's date is on or before `cut_date`
-              - any training/val session's date is after `cut_date`
+              - (`kind="temporal"` only) any eval session's date is on or
+                before `cut_date`
+              - (`kind="temporal"` only) any training/val session's date is
+                after `cut_date`
               - a trial reference appears in more than one of
                 {train, val, any eval session}
               - `session_to_index` is missing a session referenced
                 anywhere in the manifest
               - `session_to_index`'s values are not contiguous from 0
-              - an eval session's `days_since_cut` does not equal
-                `session_date - cut_date`
+              - (`kind="temporal"` only) an eval session's `days_since_cut`
+                does not equal `session_date - cut_date`
               - (only when `corpus_labels` is given) a trial reference
                 does not belong to `split_dict["corpus_filter"]`
     """
-    cut_date = date.fromisoformat(split_dict["cut_date"])
+    kind = split_dict.get("kind", "temporal")
+    if kind not in ("temporal", "official"):
+        raise ValueError(
+            f"validate_split: kind={kind!r} not in ('temporal', 'official')."
+        )
+
     train_refs = split_dict["train"]
     val_refs = split_dict["val"]
     eval_sessions = split_dict["eval_sessions"]
@@ -535,18 +617,27 @@ def validate_split(
         raise ValueError("validate_split: train is empty.")
     if not val_refs:
         raise ValueError("validate_split: val is empty.")
-    if not eval_sessions:
-        raise ValueError("validate_split: eval_sessions is empty.")
 
-    if not allow_empty_eval_sessions:
-        for e in eval_sessions:
-            if e["n_trials"] == 0:
-                raise ValueError(
-                    f"validate_split: eval session {e['session_id']!r} has "
-                    f"n_trials=0. This can be a legitimate outcome under "
-                    f"corpus filtering, but must be explicitly accepted -- "
-                    f"pass allow_empty_eval_sessions=True if so."
-                )
+    if kind == "temporal":
+        if not eval_sessions:
+            raise ValueError("validate_split: eval_sessions is empty.")
+        if not allow_empty_eval_sessions:
+            for e in eval_sessions:
+                if e["n_trials"] == 0:
+                    raise ValueError(
+                        f"validate_split: eval session {e['session_id']!r} has "
+                        f"n_trials=0. This can be a legitimate outcome under "
+                        f"corpus filtering, but must be explicitly accepted -- "
+                        f"pass allow_empty_eval_sessions=True if so."
+                    )
+    else:  # "official"
+        if eval_sessions:
+            raise ValueError(
+                f"validate_split: kind='official' manifests must have an "
+                f"empty eval_sessions (the official split has no temporal "
+                f"holdout -- docs/DATASET.md sections 12-13), got "
+                f"{len(eval_sessions)} entries."
+            )
 
     train_val_session_ids = {ref[0] for ref in train_refs} | {ref[0] for ref in val_refs}
     eval_session_ids = {e["session_id"] for e in eval_sessions}
@@ -558,31 +649,33 @@ def validate_split(
             f"train/val and eval_sessions."
         )
 
-    for e in eval_sessions:
-        eval_date = date.fromisoformat(e["session_date"])
-        if eval_date <= cut_date:
-            raise ValueError(
-                f"validate_split: eval session {e['session_id']!r} has date "
-                f"{eval_date.isoformat()}, which is on or before "
-                f"cut_date={cut_date.isoformat()}."
-            )
-        expected_offset = (eval_date - cut_date).days
-        if e["days_since_cut"] != expected_offset:
-            raise ValueError(
-                f"validate_split: eval session {e['session_id']!r} has "
-                f"days_since_cut={e['days_since_cut']}, but session_date "
-                f"{eval_date.isoformat()} minus cut_date "
-                f"{cut_date.isoformat()} is {expected_offset}."
-            )
+    if kind == "temporal":
+        cut_date = date.fromisoformat(split_dict["cut_date"])
+        for e in eval_sessions:
+            eval_date = date.fromisoformat(e["session_date"])
+            if eval_date <= cut_date:
+                raise ValueError(
+                    f"validate_split: eval session {e['session_id']!r} has date "
+                    f"{eval_date.isoformat()}, which is on or before "
+                    f"cut_date={cut_date.isoformat()}."
+                )
+            expected_offset = (eval_date - cut_date).days
+            if e["days_since_cut"] != expected_offset:
+                raise ValueError(
+                    f"validate_split: eval session {e['session_id']!r} has "
+                    f"days_since_cut={e['days_since_cut']}, but session_date "
+                    f"{eval_date.isoformat()} minus cut_date "
+                    f"{cut_date.isoformat()} is {expected_offset}."
+                )
 
-    for session_id in sorted(train_val_session_ids):
-        session_date = parse_session_date(session_id)
-        if session_date > cut_date:
-            raise ValueError(
-                f"validate_split: training/val session {session_id!r} has "
-                f"date {session_date.isoformat()}, which is after "
-                f"cut_date={cut_date.isoformat()}."
-            )
+        for session_id in sorted(train_val_session_ids):
+            session_date = parse_session_date(session_id)
+            if session_date > cut_date:
+                raise ValueError(
+                    f"validate_split: training/val session {session_id!r} has "
+                    f"date {session_date.isoformat()}, which is after "
+                    f"cut_date={cut_date.isoformat()}."
+                )
 
     group_of: dict[tuple[str, str, str], list[str]] = {}
     for ref in train_refs:

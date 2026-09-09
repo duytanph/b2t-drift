@@ -20,6 +20,7 @@ from pathlib import Path
 
 from b2t_drift.config import load_yaml
 from b2t_drift.data.splits import (
+    build_official_split,
     build_temporal_split,
     load_corpus_labels,
     validate_split,
@@ -82,6 +83,16 @@ def main() -> None:
             "offset_range": offset_range,
         })
         print(f"Wrote and validated {splits_dir / (split['name'] + '.json')}")
+
+    # The official split (Model A pipeline check, docs/DESIGN.md section 3)
+    # is structurally different from the cut-point sweep above -- no cut
+    # point, no corpus filter, no eval_sessions -- so it's built and
+    # validated separately rather than forced into MANIFEST_SPECS.
+    official = build_official_split(data_root)
+    validate_split(official)
+    write_split(official, splits_dir / f"{official['name']}.json")
+    print(f"Wrote and validated {splits_dir / (official['name'] + '.json')} "
+          f"(train={len(official['train'])}, val={len(official['val'])})")
 
     print("\n=== Summary ===")
     header = (

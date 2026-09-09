@@ -15,6 +15,7 @@ import pytest
 
 from b2t_drift.data.hdf5_io import parse_session_date
 from b2t_drift.data.splits import (
+    build_official_split,
     build_temporal_split,
     load_corpus_labels,
     load_split,
@@ -353,3 +354,67 @@ def test_load_corpus_labels_accepts_well_formed_csv(tmp_path) -> None:
     labels = load_corpus_labels(good_csv)
     assert labels[("t15.2023.08.11", 1)] == "50-Word"
     assert labels[("t15.2023.08.11", 2)] == "Switchboard"
+
+
+# --- (e) official split (Model A pipeline check) ----------------------------
+
+
+@pytest.fixture(scope="module")
+def official_split():
+    return build_official_split(DATA_ROOT)
+
+
+def test_official_split_covers_all_45_sessions(official_split) -> None:
+    session_to_index = official_split["session_to_index"]
+    assert len(session_to_index) == 45
+    assert sorted(session_to_index.values()) == list(range(45))
+
+
+def test_official_split_train_val_counts_match_published_inventory(official_split) -> None:
+    # docs/DATASET.md section 11's verified inventory: 8,072 train / 1,426 val.
+    assert len(official_split["train"]) == 8072
+    assert len(official_split["val"]) == 1426
+
+
+def test_official_split_has_no_eval_sessions_and_all_corpora(official_split) -> None:
+    assert official_split["eval_sessions"] == []
+    assert official_split["corpus_filter"] is None
+    assert official_split["kind"] == "official"
+
+
+def test_official_split_validates_cleanly(official_split) -> None:
+    validate_split(official_split)  # must not raise
+
+
+def test_official_split_train_val_disjoint_per_session(official_split) -> None:
+    # Official train/val come from separate HDF5 files (data_train vs.
+    # data_val), so no trial reference should appear in both.
+    train_refs = {tuple(r) for r in official_split["train"]}
+    val_refs = {tuple(r) for r in official_split["val"]}
+    assert train_refs.isdisjoint(val_refs)
+
+
+def test_validate_split_rejects_official_manifest_with_nonempty_eval_sessions(official_split) -> None:
+    bad = copy.deepcopy(official_split)
+    bad["eval_sessions"] = [{"session_id": "t15.2023.10.20"}]
+    with pytest.raises(ValueError, match="official"):
+        validate_split(bad)
+
+
+def test_validate_split_defaults_missing_kind_to_temporal(sb_split) -> None:
+    # Manifests written before the "kind" field existed have no such key --
+    # validate_split must still apply the temporal (cut-date) checks to them.
+    no_kind = copy.deepcopy(sb_split)
+    del no_kind["kind"]
+    # allow_empty_eval_sessions=True: sb_split (Switchboard s15) genuinely
+    # has a zero-trial eval session under corpus filtering, same as
+    # 01_build_splits.py's real call -- unrelated to the kind-default
+    # behavior this test targets.
+    validate_split(no_kind, allow_empty_eval_sessions=True)  # must not raise -- defaults to "temporal"
+
+
+def test_validate_split_rejects_unknown_kind(sb_split) -> None:
+    bad = copy.deepcopy(sb_split)
+    bad["kind"] = "bogus"
+    with pytest.raises(ValueError, match="bogus"):
+        validate_split(bad)
