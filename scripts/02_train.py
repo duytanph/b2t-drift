@@ -240,7 +240,10 @@ def main() -> None:
         smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
     ).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=training_config["learning_rate"])
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=training_config["learning_rate"],
+        weight_decay=training_config.get("weight_decay", 0.0),
+    )
     criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
 
     use_amp = bool(training_config.get("amp", False)) and device.type == "cuda"

@@ -35,7 +35,8 @@ from b2t_drift.data.collate import collate_trials
 from b2t_drift.data.dataset import TrialDataset
 from b2t_drift.data.splits import load_split, split_to_trial_ids
 from b2t_drift.evaluation.edit_distance import EditCounts
-from b2t_drift.evaluation.metrics import per_session_metrics
+from b2t_drift.evaluation.metrics import bootstrap_paired_difference_ci, per_session_metrics
+from b2t_drift.evaluation.shuffled_control import build_shuffled_batches
 from b2t_drift.models.gru_ctc import GRUCTC
 from b2t_drift.phonemes import BLANK_INDEX
 from b2t_drift.training.checkpoint import load_checkpoint
@@ -45,14 +46,19 @@ from b2t_drift.utils.provenance import get_git_commit_hash
 DEFAULT_DATA_CONFIG_PATH = Path("configs/data/t15.yaml")
 BATCH_SIZE = 32
 NUM_WORKERS = 2
+SHUFFLED_CONTROL_SEED = 0
 
 CSV_FIELDNAMES = [
     "session_id", "session_date", "days_since_cut", "n_trials", "passes_threshold",
     "per", "per_ci_lower", "per_ci_upper",
-    "substitutions", "deletions", "insertions", "n_reference_phonemes",
-    "substitution_rate", "deletion_rate", "insertion_rate",
+    "substitutions", "deletions", "insertions", "n_reference_phonemes", "n_correct",
+    "substitution_rate", "deletion_rate", "insertion_rate", "substitution_rate_among_emitted",
     "silence_deletions", "phoneme_deletions",
     "median_seq_len", "decoded_length_ratio", "eval_seconds",
+]
+SHUFFLED_CONTROL_FIELDNAMES = [
+    "per_shuffled", "effective_signal", "effective_signal_ci_lower", "effective_signal_ci_upper",
+    "n_shuffle_rejected_no_donor",
 ]
 
 
@@ -93,6 +99,16 @@ def main() -> None:
             "Evaluate only eval sessions with passes_threshold true. Default: evaluate ALL "
             "held-out sessions and record passes_threshold per row, so the threshold can be "
             "applied at plotting time rather than baked in here."
+        ),
+    )
+    parser.add_argument(
+        "--shuffled-control", action="store_true",
+        help=(
+            "Also evaluate each session with input_features replaced by a length-compatible "
+            "donor trial's features from the SAME session (targets unchanged, fixed seed) -- "
+            "tests whether the model is extracting real neural information on that session. "
+            "Adds per_shuffled, effective_signal (= per_shuffled - per_real, with a bootstrap "
+            "CI) and n_shuffle_rejected_no_donor columns."
         ),
     )
     args = parser.parse_args()
@@ -177,6 +193,45 @@ def main() -> None:
             f"seconds={result['seconds']:.2f}"
         )
 
+        if args.shuffled_control:
+            shuffled_batches, n_rejected = build_shuffled_batches(
+                trial_ids, data_root, session_to_index, BATCH_SIZE, seed=SHUFFLED_CONTROL_SEED,
+            )
+            shuffled_result = evaluate(
+                model, shuffled_batches, criterion, device, blank_index=BLANK_INDEX, compute_per=True,
+            )
+            shuffled_counts = shuffled_result["counts"]
+            per_shuffled = shuffled_result["per"]
+            effective_signal = per_shuffled - result["per"]
+
+            # Paired bootstrap CI requires exact 1:1 trial alignment between
+            # the real and shuffled count lists -- only guaranteed when every
+            # trial found a donor (n_rejected == 0). See
+            # build_shuffled_batches's docstring: rejected trials are simply
+            # absent, not replaced, so a nonzero n_rejected would misalign
+            # `counts` (all session trials) against `shuffled_counts` (a
+            # strict subset) by position.
+            if n_rejected == 0 and len(counts) == len(shuffled_counts):
+                _, ci_lower, ci_upper = bootstrap_paired_difference_ci(counts, shuffled_counts)
+            else:
+                ci_lower = ci_upper = None
+                print(
+                    f"[03_evaluate] {session_id}: {n_rejected} trial(s) had no length-compatible "
+                    f"donor -- effective_signal CI skipped (pairing would be misaligned)."
+                )
+
+            per_session_extra[session_id].update({
+                "per_shuffled": per_shuffled,
+                "effective_signal": effective_signal,
+                "effective_signal_ci_lower": ci_lower,
+                "effective_signal_ci_upper": ci_upper,
+                "n_shuffle_rejected_no_donor": n_rejected,
+            })
+            print(
+                f"[03_evaluate] {session_id}: per_shuffled={per_shuffled:.4f}  "
+                f"effective_signal={effective_signal:+.4f}  n_rejected={n_rejected}"
+            )
+
     if skipped_zero_trials:
         print(
             f"[03_evaluate] skipped {len(skipped_zero_trials)} eval session(s) with 0 trials "
@@ -188,7 +243,7 @@ def main() -> None:
     out_rows = []
     for row in metrics_rows:
         extra = per_session_extra[row["session_id"]]
-        out_rows.append({
+        out_row = {
             "session_id": row["session_id"],
             "session_date": row["session_date"],
             "days_since_cut": row["days_since_cut"],
@@ -201,19 +256,31 @@ def main() -> None:
             "deletions": extra["deletions"],
             "insertions": extra["insertions"],
             "n_reference_phonemes": row["n_reference_phonemes"],
+            "n_correct": row["n_correct"],
             "substitution_rate": extra["substitution_rate"],
             "deletion_rate": extra["deletion_rate"],
             "insertion_rate": extra["insertion_rate"],
+            "substitution_rate_among_emitted": row["substitution_rate_among_emitted"],
             "silence_deletions": extra["silence_deletions"],
             "phoneme_deletions": extra["phoneme_deletions"],
             "median_seq_len": row["median_seq_len"],
             "decoded_length_ratio": extra["decoded_length_ratio"],
             "eval_seconds": extra["eval_seconds"],
-        })
+        }
+        if args.shuffled_control:
+            out_row.update({
+                "per_shuffled": extra["per_shuffled"],
+                "effective_signal": extra["effective_signal"],
+                "effective_signal_ci_lower": extra["effective_signal_ci_lower"],
+                "effective_signal_ci_upper": extra["effective_signal_ci_upper"],
+                "n_shuffle_rejected_no_donor": extra["n_shuffle_rejected_no_donor"],
+            })
+        out_rows.append(out_row)
 
+    fieldnames = CSV_FIELDNAMES + SHUFFLED_CONTROL_FIELDNAMES if args.shuffled_control else CSV_FIELDNAMES
     csv_path = out_dir / "per_session_metrics.csv"
     with csv_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(out_rows)
     print(f"[03_evaluate] wrote {len(out_rows)} row(s) to {csv_path}")
@@ -229,6 +296,7 @@ def main() -> None:
         "timestamp": datetime.now(UTC).isoformat(),
         "device": str(device),
         "passing_only": args.passing_only,
+        "shuffled_control": args.shuffled_control,
         "n_sessions_evaluated": len(out_rows),
         "n_sessions_skipped_zero_trials": len(skipped_zero_trials),
     }

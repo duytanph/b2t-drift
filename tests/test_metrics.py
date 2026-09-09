@@ -16,6 +16,7 @@ from b2t_drift.evaluation.edit_distance import EditCounts
 from b2t_drift.evaluation.metrics import (
     aggregate_error_rate,
     bootstrap_error_rate_ci,
+    bootstrap_paired_difference_ci,
     error_rate_by_session,
     per_session_metrics,
 )
@@ -157,6 +158,64 @@ def test_per_session_metrics_derived_fields() -> None:
     assert row["n_reference_phonemes"] == 60  # 10+20+30
     assert row["per"] == aggregate_error_rate(counts)
     assert row["per_ci_lower"] <= row["per"] <= row["per_ci_upper"]
+    # substitutions_total=3, deletions_total=1, n_reference_phonemes=60
+    assert row["n_correct"] == 56  # 60 - 3 - 1
+    assert row["substitution_rate_among_emitted"] == pytest.approx(3 / 59)  # 3 / (3 + 56)
+
+
+def test_per_session_metrics_substitution_rate_among_emitted_independent_of_emission_rate() -> None:
+    # Two sessions with the SAME substitution_rate (normalized by reference
+    # length) but very different emission rates (deletions dominate one) --
+    # substitution_rate_among_emitted must differ where substitution_rate
+    # alone would look identical, since it isolates "how often is a
+    # COMMITTED phoneme wrong" from "how often does the model commit at all".
+    high_emission = [EditCounts(substitutions=10, deletions=0, insertions=0, reference_length=100)]
+    low_emission = [EditCounts(substitutions=10, deletions=90, insertions=0, reference_length=100)]
+    session_metadata = {
+        "high": {"session_date": "2023-09-01", "days_since_cut": 5},
+        "low": {"session_date": "2023-09-01", "days_since_cut": 5},
+    }
+    rows = per_session_metrics(
+        {"high": high_emission, "low": low_emission}, session_metadata, n_resamples=200,
+    )
+    by_id = {r["session_id"]: r for r in rows}
+
+    # substitution_rate (elsewhere, = substitutions / reference_length) would
+    # read identically (10/100 = 0.10) for both -- confirm the two derived
+    # per_session_metrics fields instead diverge:
+    assert by_id["high"]["substitution_rate_among_emitted"] == pytest.approx(10 / 100)  # n_correct=90, 10/(10+90)
+    assert by_id["low"]["substitution_rate_among_emitted"] == pytest.approx(10 / 10)  # n_correct=0, 10/(10+0)
+    assert by_id["high"]["substitution_rate_among_emitted"] != by_id["low"]["substitution_rate_among_emitted"]
+
+
+# --- bootstrap_paired_difference_ci -----------------------------------------
+
+
+def test_bootstrap_paired_difference_ci_point_estimate() -> None:
+    counts_a = _synthetic_counts(100, seed=1, error_rate=0.10)
+    counts_b = _synthetic_counts(100, seed=1, error_rate=0.30)  # different rate, same synthetic lengths (seed)
+    point, lower, upper = bootstrap_paired_difference_ci(counts_a, counts_b, n_resamples=2000, seed=0)
+    assert point == pytest.approx(aggregate_error_rate(counts_b) - aggregate_error_rate(counts_a))
+    assert lower <= point <= upper
+
+
+def test_bootstrap_paired_difference_ci_zero_when_identical() -> None:
+    counts = _synthetic_counts(50, seed=3)
+    point, lower, upper = bootstrap_paired_difference_ci(counts, counts, n_resamples=500, seed=0)
+    assert point == 0.0
+    assert lower <= 0.0 <= upper
+
+
+def test_bootstrap_paired_difference_ci_raises_on_length_mismatch() -> None:
+    counts_a = _synthetic_counts(10, seed=1)
+    counts_b = _synthetic_counts(11, seed=1)
+    with pytest.raises(ValueError, match="length"):
+        bootstrap_paired_difference_ci(counts_a, counts_b)
+
+
+def test_bootstrap_paired_difference_ci_raises_on_empty() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        bootstrap_paired_difference_ci([], [])
 
 
 def test_per_session_metrics_raises_on_missing_metadata() -> None:

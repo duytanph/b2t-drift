@@ -142,6 +142,78 @@ def bootstrap_error_rate_ci(
     return point_estimate, float(lower), float(upper)
 
 
+def bootstrap_paired_difference_ci(
+    counts_a: list[EditCounts],
+    counts_b: list[EditCounts],
+    n_resamples: int = 10000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> tuple[float, float, float]:
+    """Bootstrap a CI on `aggregate_error_rate(counts_b) -
+    aggregate_error_rate(counts_a)`, for two PAIRED (same trial, same
+    order) count lists -- e.g. `scripts/03_evaluate.py --shuffled-control`'s
+    `effective_signal = per_shuffled - per_real`.
+
+    Resamples trial INDICES once per replicate and applies the SAME
+    indices to both `counts_a` and `counts_b` (paired resampling), which
+    preserves the pairing -- a trial that happens to be easy or hard is
+    the same trial under both conditions -- rather than treating the two
+    conditions as independent samples, which would overstate the
+    difference's uncertainty. Same underlying reasoning as
+    `bootstrap_error_rate_ci`'s module-docstring argument for
+    example-level (not phoneme-level) resampling, one level up.
+
+    Args:
+        counts_a, counts_b: Same length, index `i` in each corresponding
+            to the SAME trial (e.g. `counts_a`=real-features counts,
+            `counts_b`=shuffled-features counts for the identical trials
+            in the identical order). The returned difference is
+            `counts_b`'s rate minus `counts_a`'s.
+        n_resamples, confidence, seed: As in `bootstrap_error_rate_ci`.
+
+    Returns:
+        `(point_estimate, ci_lower, ci_upper)` for the aggregate-rate
+        difference.
+
+    Raises:
+        ValueError: If `counts_a` or `counts_b` is empty, they have
+            different lengths (the pairing is broken -- e.g. some trials
+            were excluded from one condition but not the other, which the
+            caller must resolve before calling this, not silently here),
+            or `confidence` is not strictly between 0 and 1.
+    """
+    if not counts_a or not counts_b:
+        raise ValueError(
+            "bootstrap_paired_difference_ci: counts_a and counts_b must both be non-empty."
+        )
+    if len(counts_a) != len(counts_b):
+        raise ValueError(
+            f"bootstrap_paired_difference_ci: counts_a has {len(counts_a)} item(s), "
+            f"counts_b has {len(counts_b)} -- must be the same length (paired, same "
+            f"trial order) for the resampled indices to mean the same trial in both."
+        )
+    if not (0.0 < confidence < 1.0):
+        raise ValueError(
+            f"bootstrap_paired_difference_ci: confidence={confidence} must be "
+            f"strictly between 0 and 1."
+        )
+
+    point_estimate = aggregate_error_rate(counts_b) - aggregate_error_rate(counts_a)
+
+    n = len(counts_a)
+    rng = random.Random(seed)
+    diffs = np.empty(n_resamples, dtype=np.float64)
+    for i in range(n_resamples):
+        idx = [rng.randrange(n) for _ in range(n)]
+        resample_a = [counts_a[j] for j in idx]
+        resample_b = [counts_b[j] for j in idx]
+        diffs[i] = aggregate_error_rate(resample_b) - aggregate_error_rate(resample_a)
+
+    alpha = 1.0 - confidence
+    lower, upper = np.percentile(diffs, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return point_estimate, float(lower), float(upper)
+
+
 def error_rate_by_session(
     counts_by_session: dict[str, list[EditCounts]],
 ) -> dict[str, float]:
@@ -196,9 +268,31 @@ def per_session_metrics(
         One dict per session id present in `counts_by_session`, with keys
         `session_id`, `session_date`, `days_since_cut`, `n_trials`, `per`,
         `per_ci_lower`, `per_ci_upper`, `median_seq_len`,
-        `n_reference_phonemes`. **Sorted by `days_since_cut` ascending**
-        -- this is the drift curve's x-axis; an unsorted result would
-        silently produce a scrambled plot rather than a curve.
+        `n_reference_phonemes`, `n_correct`, `substitution_rate_among_emitted`.
+        **Sorted by `days_since_cut` ascending** -- this is the drift
+        curve's x-axis; an unsorted result would silently produce a
+        scrambled plot rather than a curve.
+
+        `n_correct` and `substitution_rate_among_emitted` exist to
+        UNCONFOUND substitutions from emission rate. `substitution_rate`
+        (elsewhere, normalized by reference length, e.g.
+        `scripts/03_evaluate.py`'s CSV) can only fall as a session's
+        `decoded_to_reference_length_ratio` falls, mechanically, REGARDLESS
+        of whether phoneme tuning changed -- a substitution can only occur
+        where the model emitted a token, so emitting fewer tokens
+        mechanically produces fewer substitutions and more deletions, and
+        reading that shift as "channels going quiet, not tuning change"
+        conflates a normalization artifact with the actual attribution
+        question (`docs/DESIGN.md` section 4). `n_correct = reference_length
+        - substitutions - deletions` (positions where the model emitted the
+        RIGHT token) and `substitution_rate_among_emitted = substitutions /
+        (substitutions + n_correct)` -- substitutions as a fraction of
+        commitments (right or wrong), not of the whole reference -- are
+        independent of how often the model commits to a phoneme at all.
+        `substitution_rate_among_emitted` rising with elapsed time supports
+        a tuning-change (phoneme-to-channel mapping shift) explanation;
+        flat while emission falls supports channels going quiet (SNR
+        loss) instead.
 
     Raises:
         ValueError: If a session id in `counts_by_session` has an empty
@@ -224,6 +318,14 @@ def per_session_metrics(
             counts, n_resamples=n_resamples, confidence=confidence, seed=seed,
         )
         reference_lengths = [c.reference_length for c in counts]
+        n_reference_phonemes = sum(reference_lengths)
+        substitutions_total = sum(c.substitutions for c in counts)
+        deletions_total = sum(c.deletions for c in counts)
+        n_correct = n_reference_phonemes - substitutions_total - deletions_total
+        n_emitted_aligned = substitutions_total + n_correct  # == n_reference_phonemes - deletions_total
+        substitution_rate_among_emitted = (
+            substitutions_total / n_emitted_aligned if n_emitted_aligned > 0 else 0.0
+        )
         rows.append({
             "session_id": session_id,
             "session_date": meta["session_date"],
@@ -233,7 +335,9 @@ def per_session_metrics(
             "per_ci_lower": lower,
             "per_ci_upper": upper,
             "median_seq_len": float(statistics.median(reference_lengths)),
-            "n_reference_phonemes": sum(reference_lengths),
+            "n_reference_phonemes": n_reference_phonemes,
+            "n_correct": n_correct,
+            "substitution_rate_among_emitted": substitution_rate_among_emitted,
         })
 
     rows.sort(key=lambda r: r["days_since_cut"])
