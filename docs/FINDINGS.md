@@ -355,6 +355,51 @@ rule before seeing any PER — not after — is what makes the selection
 principled rather than a post-hoc rationalization of whichever cut looks
 best.
 
+**Addendum (2026-09-08): the numeric "acceptable" threshold, defined now
+while only one cut point (s15) has been trained.** This rule named
+"acceptable" and a "2 absolute percentage point" comparable band but never
+gave either a number. s15's 100-epoch diagnostic run gives exactly one
+anchor -- `best_val_per = 0.353` (epoch 92) -- and this addendum is written
+using only that anchor, before s05/s10/s20 have been trained.
+
+- **Acceptable validation PER: ≤ 0.45.** Reasoning against the s15 anchor:
+  (1) the margin above the anchor (0.45 − 0.353 = 0.097, ~0.10) is roughly
+  11x the measured best-epoch-selection noise (`std(val_per)` over the last
+  20 epochs = 0.0091 -- see the timing/noise entry below), so a cut failing
+  this threshold is failing for a real reason (underfitting / a floor
+  effect from less training data), not selection variance -- see the next
+  bullet for where the 0.0091 noise figure comes from; (2) it sits far
+  below the diagnostic run's observed "blank phase" ceiling (val PER ~0.83
+  in early epochs, before the model commits to any phoneme structure --
+  see the earlier diagnostic-run analysis), so a cut at 0.45 is still
+  unambiguously a functioning decoder, nowhere near collapse into that
+  regime; (3) it does not pre-judge the untrained cuts: s05 (908 training
+  trials, 28.8% of s15's 3,150) is expected to be worse than s15 via the
+  floor effect `docs/DESIGN.md` section 7 already names as a risk, and a
+  tighter threshold (e.g. requiring PER within a few points of 0.353) would
+  effectively decide s05/s10 fail before they are even run, defeating the
+  purpose of a pre-committed rule that is supposed to be decided ahead of
+  the evidence, not shaped to it.
+- **The existing 2-percentage-point "comparable" band, read against
+  measured selection noise.** `std(val_per)` over the diagnostic run's last
+  20 epochs is **0.0091**; best epoch 92 (0.353) vs. final epoch 99 (0.371)
+  differ by **0.018**, roughly two standard deviations of that noise. The
+  0.02 "comparable" band is therefore about **2.2x** the measured
+  selection noise (0.02 / 0.0091 ≈ 2.2) -- tight enough to still mean
+  something (a difference this size is unlikely to be pure epoch-selection
+  luck) but not so tight that ordinary run-to-run noise would make two
+  genuinely-similar cut points look different. Recorded explicitly so a
+  reader can see the band was derived from a measurement, not chosen by
+  eye.
+- **Why this was written before any other cut point had a PER value.**
+  Exactly one anchor (s15 = 0.353) exists at the time of writing. Waiting
+  until s05/s10/s20 also have PER values before fixing this threshold would
+  let those numbers silently influence where the line gets drawn -- the
+  same failure mode the original rule (written before any PER existed) was
+  designed to prevent. Fixing the number now, against only the s15 anchor,
+  keeps the whole rule (both the original "largest acceptable cut" logic
+  and this threshold) pre-committed rather than post-hoc.
+
 ---
 
 ### Storage medium, not DataLoader configuration, was the training bottleneck (2026-09-03 to 2026-09-04)
@@ -420,3 +465,92 @@ forward argument): 4.77e-7 (fresh) and 9.54e-7 (trained), both below the
 
 **Consequence:** PER is now provably independent of batch composition
 (`docs/DESIGN.md` section 8).
+
+---
+
+### Combined train+eval epoch timing does not yet resolve against the train-only 41.9s figure; instrumentation added (2026-09-08)
+
+**Question:** The s15 100-epoch diagnostic run's `metrics.csv` `seconds`
+column averaged 21.3 s/epoch, far below the "Storage medium, not DataLoader
+configuration..." entry's 41.9 s/epoch. Is this the same page-cache-warming
+effect that entry itself names as a risk, or something else?
+
+**Method:** Read `metrics.csv`'s `seconds` column directly (no retraining).
+**This column is `train_seconds + eval_seconds` combined** (`fit()`'s row
+dict, `training/loop.py`), while the 41.9s figure above was **train-only**
+(`train_one_epoch`, no `evaluate()` call) -- the two were never a like-for-
+like comparison, and this could not be resolved from the existing artifact
+alone, since `metrics.csv` had no way to separate the two. `training/loop.py`'s
+`fit()` now additionally logs `train_seconds` and `eval_seconds` as their own
+columns (keeping `seconds` as their sum, unchanged, for anything already
+reading it) -- this resolves the ambiguity starting with the NEXT run, not
+retroactively for the diagnostic run already on disk.
+
+**Result (from the existing, combined-only column):** epoch 0: 55.68s;
+epoch 1: 47.19s; epoch 2: 41.34s; steady-state (epochs 10-99): median
+**18.36 s/epoch**, IQR 1.35s (Q1 17.90, Q3 19.25); first epoch within 10% of
+that steady-state median: **epoch 22**. The monotonic decline from a cold
+55.68s down to a steady ~18.36s over the first ~22 epochs is consistent
+with the ~5 GB s15 training set (3,150 trials) gradually becoming
+OS-page-cache resident against 16 GB system RAM, mirroring the mechanism
+the original entry already documented for the initial spinning-disk-to-SSD
+comparison -- but **this cannot yet be stated as confirmed**: because the
+column is combined, the same decline could also be explained by eval-side
+caching, cuDNN algorithm re-selection settling, or some mix of all three.
+**The train-only figure needed to compare directly against the recorded
+41.9s is not computable from this run's artifacts and is not reported
+here** -- no subtracted or estimated number is given; the next run (which
+will have separate `train_seconds`/`eval_seconds` columns) resolves this
+directly.
+
+**Consequence:** Revised four-cut sweep wall-clock estimate, using the
+measured 18.36 s/epoch **combined train+eval** rate, scaled linearly by
+train-trial count (908 / 2,098 / 3,150 / 3,336) at 100 epochs each per
+`configs/experiment/switchboard_baseline.yaml`'s new `max_epochs: 100`
+(see "Early stopping disabled for the cut-point sweep" above): **~1.54h**,
+superseding the previously recorded 3.50h. Flagged explicitly as a
+train+eval combined figure, not a train-only one, and therefore not
+directly comparable to the 41.9s train-only figure it revises the context
+around.
+
+---
+
+### Early stopping disabled for the cut-point sweep (2026-09-08)
+
+**Question:** Is `switchboard_baseline.yaml`'s `patience: 5` (no `min_delta`)
+safe to use for the four-cut sweep?
+
+**Method:** Offline replay of `fit()`'s exact early-stopping comparison
+(strict `<`, no `min_delta`) against the 100-epoch diagnostic run's real
+`val_per` trajectory (`runs/diag_s15_100ep_nostop/metrics.csv`), at
+`patience` in `{5, 10, 15}` and `min_delta` in `{0.000, 0.005, 0.010, 0.015,
+0.020, 0.030}` -- pure arithmetic over the recorded column, no retraining.
+
+**Result:** Every `patience=5` row stops between epoch 19 and 22 regardless
+of `min_delta` -- not threshold-sensitive, since there is a noisy stretch
+around epochs 14-22 (a transient grad-norm spike, `n_inf_batches` still 0)
+that any short patience walks into. At `min_delta=0.000, patience=5`
+(today's config, before this entry): stops at epoch 22, selects epoch 17 at
+`val_per=0.5937`, vs. `0.3529` achievable at epoch 92 -- a **+0.241
+absolute PER cost**. The boundary is otherwise sharp and run-specific:
+`min_delta=0.005` never stops within 100 epochs (selects epoch 92,
+`0.3529`), while `min_delta=0.010` at `patience=10` stops at epoch 60
+(`0.3954`).
+
+**Consequence:** `configs/experiment/switchboard_baseline.yaml` now sets
+`max_epochs: 100, patience: 100` (early stopping effectively disabled --
+no 100-epoch run can accumulate 100 epochs-since-improvement). Early
+stopping is a compute-saving device; compute is not the binding constraint
+here (~1.5h for the full four-cut sweep at the measured steady-state rate,
+see the timing entry above), so disabling it costs nothing and removes a
+documented, real hazard. `fit()`'s early-stopping comparison itself
+(`training/loop.py`) is deliberately left untouched -- no `min_delta` was
+added to it. Calibrating a `min_delta` against this single run, from a
+single cut point (s15, 3,150 training trials), and then applying it to cut
+points ranging 908-3,336 training trials with their own, unmeasured noise
+profiles, is not defensible: the sharp boundary above (`0.005` vs. `0.010`
+producing a 26-epoch difference in stop point) shows how sensitive the
+choice would be to exactly the kind of single-run overfitting this project's
+validation philosophy (`CLAUDE.md`) exists to avoid. `checkpoint_best.pt`
+already selects the best epoch independent of run length, so there is no
+accuracy cost to running the full 100 epochs instead.

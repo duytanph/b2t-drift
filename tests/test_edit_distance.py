@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from b2t_drift.evaluation.edit_distance import EditCounts, levenshtein_alignment
+from b2t_drift.evaluation.edit_distance import (
+    EditCounts,
+    levenshtein_alignment,
+    levenshtein_alignment_with_deleted_tokens,
+)
 
 
 def test_identical_sequences_have_no_errors() -> None:
@@ -68,3 +72,27 @@ def test_error_rate_can_exceed_one_hundred_percent() -> None:
     assert result.reference_length == 2
     assert (result.substitutions + result.deletions + result.insertions) > result.reference_length
     assert result.error_rate > 1.0
+
+
+def test_deleted_tokens_matches_plain_alignment_and_names_the_right_tokens() -> None:
+    # ref: silence(40), phoneme(5), phoneme(7), silence(40); hyp keeps only
+    # phoneme(5) -- forces 3 deletions: the two silences and phoneme(7).
+    ref = [40, 5, 7, 40]
+    hyp = [5]
+
+    counts, deleted_tokens = levenshtein_alignment_with_deleted_tokens(ref, hyp)
+
+    assert counts == levenshtein_alignment(ref, hyp)
+    assert counts.deletions == 3
+    assert len(deleted_tokens) == counts.deletions
+    assert sorted(deleted_tokens) == [7, 40, 40]
+
+
+def test_deleted_tokens_empty_when_hypothesis_matches_exactly() -> None:
+    ref = ["s", "t", "aa", "p"]
+    hyp = ["s", "t", "aa", "p"]
+
+    counts, deleted_tokens = levenshtein_alignment_with_deleted_tokens(ref, hyp)
+
+    assert counts == levenshtein_alignment(ref, hyp)
+    assert deleted_tokens == []

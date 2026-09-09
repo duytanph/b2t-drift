@@ -28,8 +28,20 @@ training:
   # commitment yet. Revisit once a real training run's curves say
   # otherwise.
   seed: 0
-  max_epochs: 50
-  patience: 5
+  max_epochs: 100
+  patience: 100                # early stopping effectively disabled -- see docs/FINDINGS.md
+                                # ("Early stopping disabled for the cut-point sweep") for the
+                                # measurement behind this. Early stopping is a COMPUTE-SAVING
+                                # device; compute is not the constraint here (the full four-cut
+                                # sweep is ~1.5h at the measured steady-state rate). A
+                                # patience=5, no-min_delta offline replay against the 100-epoch
+                                # diagnostic run's real val_per trajectory stopped at epoch 22 and
+                                # selected epoch 17 at val PER 0.594, vs. 0.353 achievable at
+                                # epoch 92 -- a +0.241 absolute PER cost from walking into a noisy
+                                # stretch around epochs 14-22. checkpoint_best.pt already selects
+                                # the best epoch regardless of how long the run goes, so disabling
+                                # early stopping (effectively, via a patience no 100-epoch run can
+                                # reach) costs nothing and removes a documented hazard.
   batch_size: 32
   learning_rate: 0.001
   grad_clip: 1.0               # matches training/loop.py's train_one_epoch default

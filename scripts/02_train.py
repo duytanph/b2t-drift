@@ -43,6 +43,49 @@ SMOKE_N_TRAIN = 64
 SMOKE_N_VAL = 32
 
 
+def _apply_epoch_overrides(
+    training_config: dict,
+    max_epochs: int,
+    patience: int,
+    args: argparse.Namespace,
+) -> tuple[int, int, dict]:
+    """Apply `--max-epochs`/`--patience` CLI overrides.
+
+    Called AFTER `--smoke`'s own max_epochs/patience adjustment in
+    `main()`, so a combined `--smoke --max-epochs N` invocation keeps
+    `--smoke`'s tiny train/val trial limits but runs `N` epochs instead of
+    `SMOKE_MAX_EPOCHS`. Precedence, highest first: `--max-epochs`/
+    `--patience` CLI flags, then `--smoke`'s adjustment, then the config
+    file's `training.max_epochs`/`training.patience`.
+
+    Args:
+        training_config: The experiment config's raw `training` section
+            (unmodified by this function -- see the return value).
+        max_epochs, patience: The values to override, i.e. `main()`'s
+            already-`--smoke`-adjusted locals, not necessarily
+            `training_config`'s raw values.
+        args: Parsed CLI args, read for `.max_epochs` / `.patience`
+            (`None` means "no override").
+
+    Returns:
+        `(max_epochs, patience, training_config_for_resolved)`: the
+        effective values to pass to `fit`, and a NEW dict (never a
+        mutated `training_config`) equal to `training_config` except
+        `"max_epochs"`/`"patience"` are the EFFECTIVE (post-override)
+        values -- suitable for `resolved_config["training"]`, since a
+        checkpoint's saved config must describe the run that actually
+        happened, not the raw config file.
+    """
+    if args.max_epochs is not None:
+        print(f"[02_train] max_epochs overridden: {max_epochs} (config) -> {args.max_epochs} (CLI)")
+        max_epochs = args.max_epochs
+    if args.patience is not None:
+        print(f"[02_train] patience overridden: {patience} (config) -> {args.patience} (CLI)")
+        patience = args.patience
+    training_config_for_resolved = {**training_config, "max_epochs": max_epochs, "patience": patience}
+    return max_epochs, patience, training_config_for_resolved
+
+
 def _build_run_name(split_name: str, given: str | None) -> str:
     """`{date}_{split-name}_{githash}` unless a name was given explicitly."""
     if given:
@@ -122,6 +165,23 @@ def main() -> None:
             f"{SMOKE_N_TRAIN} train / {SMOKE_N_VAL} val trials."
         ),
     )
+    parser.add_argument(
+        "--max-epochs", type=int, default=None,
+        help=(
+            "Override training.max_epochs from the config. Applied AFTER "
+            "--smoke's own epoch-count adjustment, so combine with --smoke "
+            "to smoke-test the pipeline at a specific epoch count. Default: "
+            "None (use the config value, or --smoke's, if --smoke is also given)."
+        ),
+    )
+    parser.add_argument(
+        "--patience", type=int, default=None,
+        help=(
+            "Override training.patience from the config. Applied AFTER "
+            "--smoke, with the same precedence as --max-epochs. Default: "
+            "None (use the config value, or --smoke's, if --smoke is also given)."
+        ),
+    )
     args = parser.parse_args()
 
     exp_config = load_yaml(args.config)
@@ -147,6 +207,12 @@ def main() -> None:
     patience = max(training_config["patience"], max_epochs) if args.smoke else training_config["patience"]
     train_limit = SMOKE_N_TRAIN if args.smoke else None
     val_limit = SMOKE_N_VAL if args.smoke else None
+
+    # --max-epochs/--patience override the (possibly --smoke-adjusted)
+    # values above -- see _apply_epoch_overrides's docstring for precedence.
+    max_epochs, patience, effective_training_config = _apply_epoch_overrides(
+        training_config, max_epochs, patience, args,
+    )
 
     pin_memory = torch.cuda.is_available()
     train_loader, train_sampler = _build_dataloader(
@@ -202,7 +268,7 @@ def main() -> None:
         "split_name": split["name"],
         "split_path": str(args.split),
         "model": model_config,
-        "training": training_config,
+        "training": effective_training_config,
         "run_name": run_name,
         "smoke": args.smoke,
     }

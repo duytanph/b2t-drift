@@ -380,6 +380,15 @@ optimizer's first step, or use a fresh optimizer for that phase.
   electrode degradation in this dataset.** Neither this dataset nor this
   project's design can resolve that ambiguity; state it alongside any
   drift-curve result.
+- **Best-epoch selection carries roughly ±0.01 PER of noise.** Measured on
+  the s15 100-epoch diagnostic run: `std(val_per)` over the last 20 epochs
+  is 0.0091, and the selected best epoch (92, PER 0.353) differs from the
+  final epoch (99, PER 0.371) by 0.018 — about two standard deviations of
+  that noise (`docs/FINDINGS.md`: "Pre-committed cut-point selection
+  rule" addendum). **Differences below about 0.02 between cut points
+  should not be treated as meaningful** — that gap is comparable to
+  checkpoint-selection noise alone, before any real difference between
+  cuts is considered.
 - **Sentence length correlates with session date; Switchboard-only
   reduces but does not eliminate this confound.** Session level (n=45):
   Pearson r=0.27 (p=0.074, n.s.) but Spearman ρ=0.47 (p=0.0012) — driven

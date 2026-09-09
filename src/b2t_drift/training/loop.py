@@ -36,9 +36,11 @@ route through it, even though it's a no-op right now.
 
 from __future__ import annotations
 
+import json
 import math
 import time
 import warnings
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -47,8 +49,12 @@ from torch.utils.data import DataLoader
 
 from b2t_drift.data.collate import LengthBucketedSampler
 from b2t_drift.evaluation.ctc_decode import greedy_ctc_decode
-from b2t_drift.evaluation.edit_distance import EditCounts, levenshtein_alignment
+from b2t_drift.evaluation.edit_distance import (
+    EditCounts,
+    levenshtein_alignment_with_deleted_tokens,
+)
 from b2t_drift.evaluation.metrics import aggregate_error_rate
+from b2t_drift.phonemes import SILENCE_INDEX
 from b2t_drift.training.checkpoint import save_checkpoint
 from b2t_drift.training.logging import ConsoleLogger, CSVLogger, MultiLogger, RunLogger
 
@@ -362,6 +368,50 @@ def evaluate(
             `compute_per=False`.
           - `"n_trials"`: total trials evaluated.
           - `"seconds"`: wall-clock time for this call.
+          - `"blank_fraction"`: fraction of VALID (non-padded) timesteps,
+            pooled across every trial, whose argmax over the class axis
+            is `blank_index` -- computed on the raw, pre-collapse
+            `log_probs`, since this is a property of the frame-level
+            output, not of the decoded sequence. Masked to `t <
+            ctc_lengths[i]` per item `i`: `GRUCTC.forward` zeros the
+            INPUT at padded timesteps, but the GRU still produces
+            (meaningless) output there, so an unmasked count would be
+            wrong, not just imprecise. Uses `ctc_lengths`
+            (`model.ctc_input_lengths(...)`), not `batch["input_lengths"]`
+            directly -- identical today (no temporal downsampling), but
+            `ctc_lengths` is the one that actually matches `log_probs`'s
+            time axis once downsampling is added (`models/gru_ctc.py`'s
+            "THE CTC LENGTH CONTRACT"; `CLAUDE.md`'s "known pitfalls").
+            An aggregate fraction (total blank frames / total valid
+            frames), not a mean of per-batch fractions -- same reasoning
+            as `evaluation.metrics`'s aggregate-vs-mean-of-rates argument
+            (its module docstring). Expected to start near 1.0 (an
+            undertrained CTC model emits almost all blanks) and fall as
+            the model begins committing to phonemes -- the "blank phase"
+            this diagnostic exists to detect the end of. `None` if
+            `compute_per=False`.
+          - `"decoded_to_reference_length_ratio"`: total decoded tokens
+            (post-collapse, across every trial) divided by total
+            reference phoneme count (across every trial) -- an aggregate
+            ratio, not a mean of per-trial ratios, for the same reason as
+            `"blank_fraction"` and `"per"` above. `None` if
+            `compute_per=False`.
+          - `"decoded_token_counts"`: `dict[int, int]`, class index ->
+            number of times that class appears in the DECODED
+            (post-collapse) output, summed over every trial. Contains
+            only classes that appeared at least once. Empty dict (not
+            `None`) if `compute_per=False`.
+          - `"silence_deletions"` / `"phoneme_deletions"`: aggregate counts,
+            across every trial, of deletion operations (from the same
+            alignment `"counts"` is built from) whose deleted REFERENCE
+            token is the silence class (`b2t_drift.phonemes.SILENCE_INDEX`)
+            vs. any other (real-phoneme) class. `silence_deletions +
+            phoneme_deletions` always equals the total deletion count
+            summed over `"counts"`. Distinguishes "losing the
+            silence/word-boundary marker specifically" from "channels
+            going quiet on any phoneme" (`docs/DESIGN.md` section 4) --
+            information `EditCounts`'s aggregate deletion count alone
+            cannot carry. `None` if `compute_per=False`.
     """
     model.eval()
     start = time.perf_counter()
@@ -370,6 +420,14 @@ def evaluate(
     total_trials = 0
     counts: list[EditCounts] = []
     counts_by_session: dict[str, list[EditCounts]] = {}
+
+    n_blank_frames = 0
+    n_valid_frames = 0
+    total_decoded_tokens = 0
+    total_reference_tokens = 0
+    decoded_token_counts: Counter[int] = Counter()
+    silence_deletions = 0
+    phoneme_deletions = 0
 
     with torch.no_grad():
         for raw_batch in dataloader:
@@ -387,6 +445,18 @@ def evaluate(
             total_trials += batch_size
 
             if compute_per:
+                # blank_fraction: raw, pre-collapse log_probs (time, batch,
+                # classes) -- see the docstring's "blank_fraction" entry
+                # for why ctc_lengths (not batch["input_lengths"]) is the
+                # correct mask here.
+                time_indices = torch.arange(log_probs.size(0), device=log_probs.device)
+                valid_mask = (
+                    time_indices.unsqueeze(1) < ctc_lengths.to(log_probs.device).unsqueeze(0)
+                )  # (time, batch)
+                frame_argmax = log_probs.argmax(dim=-1)  # (time, batch)
+                n_blank_frames += int(((frame_argmax == blank_index) & valid_mask).sum().item())
+                n_valid_frames += int(valid_mask.sum().item())
+
                 decoded = greedy_ctc_decode(
                     log_probs.transpose(0, 1),  # (time, batch, C) -> (batch, time, C)
                     lengths=ctc_lengths,
@@ -405,13 +475,38 @@ def evaluate(
                     true_sequence = targets_list[offset:offset + length]
                     offset += length
 
-                    trial_counts = levenshtein_alignment(true_sequence, decoded[i])
+                    trial_counts, deleted_tokens = levenshtein_alignment_with_deleted_tokens(
+                        true_sequence, decoded[i],
+                    )
                     counts.append(trial_counts)
                     session_id = raw_batch["session_ids"][i]
                     counts_by_session.setdefault(session_id, []).append(trial_counts)
 
+                    total_decoded_tokens += len(decoded[i])
+                    total_reference_tokens += length
+                    decoded_token_counts.update(decoded[i])
+                    for tok in deleted_tokens:
+                        if tok == SILENCE_INDEX:
+                            silence_deletions += 1
+                        else:
+                            phoneme_deletions += 1
+
     mean_loss = total_loss / total_trials if total_trials > 0 else math.nan
     per = aggregate_error_rate(counts) if compute_per else None
+
+    if compute_per:
+        blank_fraction = n_blank_frames / n_valid_frames if n_valid_frames > 0 else math.nan
+        if total_reference_tokens > 0:
+            decoded_to_reference_length_ratio = total_decoded_tokens / total_reference_tokens
+        else:
+            # Matches EditCounts.error_rate / aggregate_error_rate's own
+            # degenerate-denominator convention.
+            decoded_to_reference_length_ratio = (
+                0.0 if total_decoded_tokens == 0 else float("inf")
+            )
+    else:
+        blank_fraction = None
+        decoded_to_reference_length_ratio = None
 
     return {
         "loss": mean_loss,
@@ -420,6 +515,11 @@ def evaluate(
         "counts_by_session": counts_by_session,
         "n_trials": total_trials,
         "seconds": time.perf_counter() - start,
+        "blank_fraction": blank_fraction,
+        "decoded_to_reference_length_ratio": decoded_to_reference_length_ratio,
+        "decoded_token_counts": dict(decoded_token_counts) if compute_per else {},
+        "silence_deletions": silence_deletions if compute_per else None,
+        "phoneme_deletions": phoneme_deletions if compute_per else None,
     }
 
 
@@ -465,8 +565,14 @@ def fit(
             (there is no prior epoch to compare against), so training
             always runs at least 2 epochs before patience can trigger.
         run_dir: Directory for `checkpoint_best.pt`, `checkpoint_last.pt`,
-            and (via `training.logging.CSVLogger`) `metrics.csv`. Created
-            if missing.
+            (via `training.logging.CSVLogger`) `metrics.csv`, and
+            `decoded_token_counts.jsonl` (one JSON line per epoch,
+            `{"epoch": ..., "counts": {"<class idx>": <count>, ...}}` --
+            `evaluate`'s full `"decoded_token_counts"` histogram, kept out
+            of `metrics.csv` itself since `CSVLogger` fixes its column set
+            from the first call's keys and a variable-width histogram
+            would either break that or force ~41 mostly-empty columns).
+            Created if missing.
         scaler, grad_clip, train_sampler: Passed straight through to
             `train_one_epoch` each epoch (`train_sampler` as its
             `sampler` argument).
@@ -539,14 +645,30 @@ def fit(
             "grad_norm_mean": train_result["grad_norm_mean"],
             "lr": optimizer.param_groups[0]["lr"],
             "seconds": train_result["seconds"] + eval_result["seconds"],
+            "train_seconds": train_result["seconds"],
+            "eval_seconds": eval_result["seconds"],
             "n_inf_batches": train_result["n_inf_batches"],
+            "val_blank_fraction": eval_result["blank_fraction"],
+            "val_decoded_length_ratio": eval_result["decoded_to_reference_length_ratio"],
+            "val_n_distinct_decoded_tokens": len(eval_result["decoded_token_counts"]),
         }
         epoch_loggers.log_scalars(epoch, row)
+
+        # Full per-class histogram, kept out of metrics.csv (see run_dir's
+        # docstring entry above) -- one JSON line per epoch.
+        with (run_dir / "decoded_token_counts.jsonl").open("a") as f:
+            f.write(json.dumps({
+                "epoch": epoch,
+                "counts": {str(k): v for k, v in eval_result["decoded_token_counts"].items()},
+            }) + "\n")
 
         checkpoint_metrics = {
             "val_per": eval_result["per"],
             "val_loss": eval_result["loss"],
             "train_loss": train_result["loss"],
+            "val_blank_fraction": eval_result["blank_fraction"],
+            "val_decoded_length_ratio": eval_result["decoded_to_reference_length_ratio"],
+            "val_n_distinct_decoded_tokens": len(eval_result["decoded_token_counts"]),
         }
         save_checkpoint(
             run_dir / "checkpoint_last.pt", model, optimizer, epoch,
