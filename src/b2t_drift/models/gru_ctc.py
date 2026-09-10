@@ -189,6 +189,8 @@ class GRUCTC(nn.Module):
         smoothing_sigma_bins: float = DEFAULT_SMOOTHING_SIGMA_BINS,
         patch_size: int = 1,
         patch_stride: int = 1,
+        day_layer_parameterization: str = "full",
+        day_layer_rank: int = 16,
     ) -> None:
         """Build the GRU/CTC decoder.
 
@@ -310,6 +312,20 @@ class GRUCTC(nn.Module):
                 20 ms bins that `patch_size` groups together, i.e. every
                 80 ms). See `patch_size`'s entry -- same tags, same
                 reasoning.
+            day_layer_parameterization: `"full"` (default), `"diagonal"`,
+                or `"lowrank"` -- forwarded to `DayLayers`; ignored when
+                `use_day_layers=False`. See `DayLayers`' module docstring
+                for what each can express and its parameter cost.
+                `[judgment call]` -- `"full"` matches the published
+                checkpoint's `day_weights` (512x512 per session), but
+                `docs/FINDINGS.md` ("Day layers are unstable when trained
+                jointly across many sessions") records that `"full"`
+                destabilizes joint training at this project's scale;
+                `"diagonal"` is the leaner alternative Arm 2 would
+                actually ship.
+            day_layer_rank: Only used when
+                `day_layer_parameterization="lowrank"`; forwarded to
+                `DayLayers`' `rank`. Default 16.
 
         Raises:
             ValueError: If `bidirectional=True` (not yet supported --
@@ -352,10 +368,21 @@ class GRUCTC(nn.Module):
         self.smoothing_sigma_bins = smoothing_sigma_bins
         self.patch_size = patch_size
         self.patch_stride = patch_stride
+        self.day_layer_parameterization = day_layer_parameterization
+        self.day_layer_rank = day_layer_rank
 
         self._input_dropout = nn.Dropout1d(input_dropout) if input_dropout > 0 else None
 
-        self.day_layers = DayLayers(n_sessions, n_features) if use_day_layers else None
+        self.day_layers = (
+            DayLayers(
+                n_sessions,
+                n_features,
+                parameterization=day_layer_parameterization,
+                rank=day_layer_rank,
+            )
+            if use_day_layers
+            else None
+        )
 
         if smoothing_sigma_bins > 0:
             kernel = _gaussian_kernel1d(smoothing_sigma_bins)

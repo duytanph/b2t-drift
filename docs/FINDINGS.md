@@ -897,3 +897,44 @@ implemented and tested this round) has never been tried *combined with*
 day layers off -- an essentially free experiment, since both pieces
 already exist independently and pass their own tests, that Task 3's
 A-E matrix did not include.
+
+---
+
+### Pre-committed rule for keeping or dropping day layers (2026-09-10)
+
+**This entry was written and committed BEFORE the round-5 four-way
+comparison's results were read** -- the same discipline as the
+"Pre-committed cut-point selection rule" above, and for the same reason:
+the decision to keep or drop day layers has consequences for the whole
+project (Question 3's Arm 2 and the identity-day-layer-redirect finding
+both depend on the mechanism existing), so the threshold that decides it
+must not be shaped by whichever configuration happens to win.
+
+**Context.** The round-4 s15 comparison (`docs/FINDINGS.md`: "Task 3
+architecture comparison") found `use_day_layers: false` beat every
+day-layer variant, but that verdict was unreliable for two reasons: (1)
+the no-day-layer run's best epoch was 98 of 100 -- it had not converged,
+so its `0.2001` is an upper bound; (2) it differed from the best
+day-layer run in TWO ways at once (no day layers AND no patching), and
+the patching-with-no-day-layers combination was never run. Round 5 runs
+four configs at 150 epochs (early stopping disabled) to resolve both:
+(1) patching + no day layers; (2) patching + diagonal day layers,
+lambda 300; (3) patching + full day layers, lambda 3000; (4) no
+patching + no day layers, 150-epoch rerun of round-4's E.
+
+**The rule.** *Keep day layers if the best day-layer configuration's val
+PER is within 0.03 of the best no-day-layer configuration's. Rationale:
+0.03 is roughly 3x the measured checkpoint-selection noise (`std` 0.0091
+over the last 20 epochs of the s15 diagnostic run -- `docs/FINDINGS.md`:
+"Pre-committed cut-point selection rule" addendum), so a smaller gap is
+not a reliable difference, and preserving the day-layer mechanism is
+worth a small, reliably-measured PER cost because Question 3's Arm 2 and
+the project's central finding (`docs/DESIGN.md` section 5: the day-layer
+gap of 0.313 exceeds 18 months of drift) both depend on it. If the gap
+exceeds 0.03, drop day layers from the primary architecture and redesign
+Arm 2 around a different adaptation mechanism.*
+
+**Outcome:** recorded in the next entry ("Day layers are unstable when
+trained jointly across many sessions"), which also carries the four-way
+comparison's numbers. The rule above is fixed as written; that entry
+only applies it.

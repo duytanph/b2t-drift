@@ -228,3 +228,34 @@ def test_n_parameters_counts_all_regardless_of_requires_grad() -> None:
 def test_n_trainable_parameters_matches_n_parameters_when_nothing_frozen() -> None:
     model = GRUCTC(n_sessions=2, n_layers=1, hidden_size=16, use_day_layers=True)
     assert model.n_parameters() == model.n_trainable_parameters()
+
+
+# --- day_layer_parameterization plumbing ----------------------------------
+
+
+@pytest.mark.parametrize("parameterization", ["full", "diagonal", "lowrank"])
+def test_day_layer_parameterization_is_forwarded_to_day_layers(parameterization) -> None:
+    """GRUCTC must pass day_layer_parameterization through to DayLayers so
+    a config can select "diagonal"/"lowrank" (docs/FINDINGS.md: "Day
+    layers are unstable when trained jointly across many sessions")."""
+    model = GRUCTC(
+        n_sessions=3, n_layers=1, hidden_size=16, use_day_layers=True,
+        day_layer_parameterization=parameterization, day_layer_rank=4,
+    )
+    assert model.day_layers.parameterization == parameterization
+    # "diagonal" owns a per-channel scale vector, not a square weight matrix.
+    if parameterization == "diagonal":
+        assert hasattr(model.day_layers, "scale")
+        assert not hasattr(model.day_layers, "weights")
+    elif parameterization == "full":
+        assert model.day_layers.weights.shape == (3, 512, 512)
+
+
+def test_day_layer_parameterization_default_is_full() -> None:
+    model = GRUCTC(n_sessions=2, n_layers=1, hidden_size=16, use_day_layers=True)
+    assert model.day_layers.parameterization == "full"
+
+
+def test_invalid_day_layer_parameterization_raises() -> None:
+    with pytest.raises(ValueError, match="parameterization"):
+        GRUCTC(n_sessions=1, use_day_layers=True, day_layer_parameterization="bogus")

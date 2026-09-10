@@ -240,6 +240,8 @@ def main() -> None:
         smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
         patch_size=model_config.get("patch_size", 1),
         patch_stride=model_config.get("patch_stride", 1),
+        day_layer_parameterization=model_config.get("day_layer_parameterization", "full"),
+        day_layer_rank=model_config.get("day_layer_rank", 16),
     ).to(device)
 
     optimizer = torch.optim.Adam(
@@ -313,6 +315,8 @@ def main() -> None:
             smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
             patch_size=model_config.get("patch_size", 1),
             patch_stride=model_config.get("patch_stride", 1),
+            day_layer_parameterization=model_config.get("day_layer_parameterization", "full"),
+            day_layer_rank=model_config.get("day_layer_rank", 16),
         )
         load_checkpoint(run_dir / "checkpoint_best.pt", sanity_model)
         print(f"[02_train] checkpoint_best.pt reloads cleanly (epoch {summary['best_epoch']}).")
