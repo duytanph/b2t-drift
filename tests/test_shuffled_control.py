@@ -72,3 +72,30 @@ def test_donor_never_shorter_than_trials_seq_len() -> None:
     for batch in batches:
         for i, trial_key in enumerate(batch["trial_keys"]):
             assert int(batch["input_lengths"][i]) >= seq_len_by_key[trial_key]
+
+
+def test_donor_length_check_accounts_for_patching() -> None:
+    """With a patched model, a donor must be long enough AFTER downsampling
+    -- `(n_time_steps - patch_size) // patch_stride + 1 >= seq_len` -- or a
+    donor that clears the raw check by a hair collapses to far fewer
+    patches than the trial has target phonemes, and CTC cannot emit them
+    (`CLAUDE.md`'s "known pitfall"; the +518d s15 outlier that surfaced
+    this: per_shuffled 0.998 vs 0.82-0.93 elsewhere)."""
+    _require_real_data()
+    trial_ids = list(iter_trial_ids(DATA_ROOT, SESSION_ID))[:40]
+    session_to_index = {SESSION_ID: 0}
+    seq_len_by_key = {t.trial_key: t.seq_len for t in trial_ids}
+    patch_size, patch_stride = 14, 4
+
+    batches, _ = build_shuffled_batches(
+        trial_ids, DATA_ROOT, session_to_index, batch_size=32,
+        patch_size=patch_size, patch_stride=patch_stride,
+    )
+    for batch in batches:
+        for i, trial_key in enumerate(batch["trial_keys"]):
+            donor_n_time_steps = int(batch["input_lengths"][i])
+            post_patch_len = (donor_n_time_steps - patch_size) // patch_stride + 1
+            assert post_patch_len >= seq_len_by_key[trial_key], (
+                f"{trial_key}: donor n_time_steps={donor_n_time_steps} -> "
+                f"{post_patch_len} patches < seq_len {seq_len_by_key[trial_key]}"
+            )

@@ -206,6 +206,7 @@ def main() -> None:
         if args.shuffled_control:
             shuffled_batches, n_rejected = build_shuffled_batches(
                 trial_ids, data_root, session_to_index, BATCH_SIZE, seed=SHUFFLED_CONTROL_SEED,
+                patch_size=model.patch_size, patch_stride=model.patch_stride,
             )
             shuffled_result = evaluate(
                 model, shuffled_batches, criterion, device, blank_index=BLANK_INDEX, compute_per=True,
