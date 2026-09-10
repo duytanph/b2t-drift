@@ -75,6 +75,18 @@ facts and terminology.
 
 ## Status
 
-Week 0 complete: environment set up (uv, CUDA PyTorch), full data inventory
-and label-encoding verification done (see `GLOSSARY.md` "Dataset facts").
-No models have been trained yet.
+Environment, data inventory, and label-encoding verification complete (see
+`GLOSSARY.md` "Dataset facts"); pipeline built and validated; architecture
+settled (`docs/FINDINGS.md`: "Day layers are unstable when trained jointly
+across many sessions"). The cut-point drift sweep has not been run yet.
+
+**On absolute PER.** Our pipeline reaches val PER **0.296** on the official
+split, against the published baseline's **0.101**. The remaining gap is
+attributable to a deliberately smaller architecture (3 GRU layers × 512
+hidden vs. the baseline's 5 × 768) and to remaining implementation
+differences — not to a pipeline defect: the gradient-clipping audit found
+no error, and the single-batch overfit gate and phoneme-decode tests pass.
+The drift results this project exists to produce are **relative**
+measurements — `effective_signal` (real vs. shuffled-input PER) and the
+day-layer recalibration gap — and do not depend on matching the published
+absolute PER.

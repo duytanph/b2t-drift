@@ -1,5 +1,6 @@
-# Baseline training experiment: GRUCTC at its documented default
-# hyperparameters (docs/DESIGN.md section 10, "Model hyperparameters"),
+# Baseline training experiment: GRUCTC at the hyperparameters settled by
+# the round-5 four-way s15 architecture comparison (docs/FINDINGS.md:
+# "Day layers are unstable when trained jointly across many sessions"),
 # trained on one of the Switchboard cut-point sweep's split manifests.
 #
 # The split manifest itself is NOT referenced here -- it's passed
@@ -16,46 +17,56 @@ model:
   n_layers: 3                # docs/DESIGN.md section 10: [judgment call -- revisit if the baseline underfits]
   dropout: 0.4                # docs/DESIGN.md section 10: [convention]
   bidirectional: false        # docs/DESIGN.md section 10: [principled]
-  use_day_layers: true        # docs/DESIGN.md section 10: [principled]
+  use_day_layers: true        # docs/DESIGN.md section 10 + 5. KEPT by the pre-registered keep/drop
+                              # rule (docs/FINDINGS.md: "Pre-committed rule for keeping or dropping
+                              # day layers"): best day-layer config (diagonal, lambda 300, patched)
+                              # reached val PER 0.16932 vs 0.1697 for the best no-day-layer config
+                              # -- a -0.0004 gap, far inside the 0.03 band. Question 3's Arm 2 and
+                              # the +0.313 day-layer-gap finding both depend on this staying on.
+  day_layer_parameterization: diagonal
+                              # [judgment call]. 1,024 params/session (per-channel gain+offset), vs
+                              # "full"'s 262,656. "full" DIVERGED when all 45 slices trained jointly
+                              # even at lambda 3000 (round-5 run 3: best 0.251 @ ep38, then train
+                              # loss rose 1.4 -> 3.5); "diagonal" was stable AND matched the
+                              # no-day-layer PER, with slices staying ~identity (max|W-I| ~ 0.04
+                              # after 150 epochs). Also the parameterization Arm 2 can actually fit
+                              # from 10-50 labelled sentences. See docs/DESIGN.md section 5.
   input_dropout: 0.0          # docs/DESIGN.md section 10: [judgment call]
   smoothing_sigma_bins: 2.0   # docs/DESIGN.md section 10: [principled]
-  patch_size: 1                # 1 = no-op (baseline). 14 matches the published pipeline -- an
-  patch_stride: 1               # explicit Task 3 comparison, not this config's default.
+  patch_size: 14              # [principled] -- matches the published pipeline (concatenate 14
+  patch_stride: 4             # consecutive 20 ms bins, stepped every 4 -> 7,168-dim GRU input at an
+                              # 80 ms output stride). Round-5: patching cut s15 val PER from the
+                              # ~0.196-0.200 no-patch plateau (run 4, still not converged at ep149)
+                              # to ~0.169-0.170 (runs 1-2). ctc_input_lengths divides lengths to the
+                              # patched axis before nn.CTCLoss -- see gru_ctc.py's CTC length
+                              # contract and CLAUDE.md's known pitfalls.
 
 training:
-  # Every value below is a reasonable starting point chosen by ordinary
-  # ML-engineering judgment, NOT swept or tuned against this project's
-  # data -- unlike the model hyperparameters above, none of these carry
-  # a docs/DESIGN.md citation, because none has been decided as a project
-  # commitment yet. Revisit once a real training run's curves say
-  # otherwise.
+  # Values below are ordinary ML-engineering starting points, NOT swept
+  # against this project's data, EXCEPT day_layer_penalty (measured -- see
+  # its comment) and max_epochs/patience (set from observed convergence).
   seed: 0
-  max_epochs: 100
-  patience: 100                # early stopping effectively disabled -- see docs/FINDINGS.md
-                                # ("Early stopping disabled for the cut-point sweep") for the
-                                # measurement behind this. Early stopping is a COMPUTE-SAVING
-                                # device; compute is not the constraint here (the full four-cut
-                                # sweep is ~1.5h at the measured steady-state rate). A
-                                # patience=5, no-min_delta offline replay against the 100-epoch
-                                # diagnostic run's real val_per trajectory stopped at epoch 22 and
-                                # selected epoch 17 at val PER 0.594, vs. 0.353 achievable at
-                                # epoch 92 -- a +0.241 absolute PER cost from walking into a noisy
-                                # stretch around epochs 14-22. checkpoint_best.pt already selects
-                                # the best epoch regardless of how long the run goes, so disabling
-                                # early stopping (effectively, via a patience no 100-epoch run can
-                                # reach) costs nothing and removes a documented hazard.
+  max_epochs: 150             # bumped from 100: the round-5 comparison ran 150 epochs and the
+                              # chosen config's best epoch was 106 (past 100). 150 leaves headroom
+                              # without early stopping while every good config has plateaued well
+                              # before then. See docs/FINDINGS.md ("Day layers are unstable...").
+  patience: 150               # early stopping still effectively disabled (no 150-epoch run can
+                              # accumulate 150 epochs-since-improvement) -- see docs/FINDINGS.md
+                              # ("Early stopping disabled for the cut-point sweep"). checkpoint_best.pt
+                              # selects the best epoch regardless of run length.
   batch_size: 32
   learning_rate: 0.001
   grad_clip: 1.0               # matches training/loop.py's train_one_epoch default
-  day_layer_penalty: 0.0       # 0.0 = no identity-anchoring penalty (baseline). Chosen value for
-                                # the Task 3 comparison is 300 -- see docs/FINDINGS.md ("Choosing
-                                # the identity-anchored day-layer penalty's lambda"): measured on a
-                                # real s15 run (penalty computed but not applied), lambda=300 gives
-                                # ~0.11% of total loss at epoch 1, ~3.26% at epoch 5, ~7.53% at
-                                # epoch 10 -- inside the targeted 1-10%-at-epoch-5 band, growing but
-                                # not dominating. This is measured from an UNANCHORED trajectory (an
-                                # upper bound on how far weights drift); a run that actually applies
-                                # the penalty should see a SMALLER raw_penalty once it takes hold.
+  day_layer_penalty: 300.0    # lambda for DayLayers.identity_penalty() -- the identity-anchored
+                              # (NOT zero-anchored) regulariser. Measured on a real s15 run (penalty
+                              # computed but not applied): lambda=300 contributes ~0.11% / 3.05% /
+                              # 7.89% of total loss at epochs 1 / 5 / 10 -- an anchor, not a
+                              # dominator. lambda=3000 reaches 46% by epoch 10 and starved CTC
+                              # (round-5 run 3 diverged). See docs/FINDINGS.md ("Choosing the
+                              # identity-anchored day-layer penalty's lambda", "Day layers are
+                              # unstable..."). With "diagonal" the penalty is barely load-bearing
+                              # (slices stay near identity on their own) but is kept for the
+                              # cut-point sweep's smaller train sets where drift pressure is higher.
   amp: true                    # only actually used when a CUDA device is available -- see scripts/02_train.py
   num_workers: 2                 # docs/DESIGN.md section 8; full measurement history in docs/FINDINGS.md
                                   # ("Storage medium, not DataLoader configuration, was the training

@@ -136,41 +136,41 @@ much does drift cost, and can recalibration offset some of it" to
 question is really about cost-efficiency (how little labeled data
 achieves that recovery), not whether recalibration helps at all."
 
-**Arm 2's `"full"` parameterization is likely unworkable at small N.**
-Model A trained all 45 `"full"` day-layer slices (`docs/DATASET.md`;
-11.8M of 16.6M total parameters at this scale) simultaneously, each
-against hundreds of training trials, with `weight_decay=0.0` (no
-anchor toward identity) — and diverged (`docs/FINDINGS.md`: "Model A's
-initial result and divergence"; this round's Task 1/3/4 diagnose the
-mechanism and test the identity-anchored-penalty fix). If 45 slices with
-hundreds of trials each still destabilize training, a SINGLE new-day
-`"full"` slice fit from Arm 2's target of 10-50 labeled sentences (far
-less data per slice) is not a smaller version of a working setup — it is
-an even more underdetermined version of a setup that already failed at
-much greater data-per-slice. `"diagonal"` and `"lowrank"`
-(`models/day_layers.py`'s module docstring: 1,024 and 16,896
-params/session respectively, vs. `"full"`'s 262,656) are probably the
-only viable parameterizations for Arm 2 as actually deployed; `"full"`
-remains useful as an UPPER-BOUND comparison (how much PER recovery is
-theoretically available with unlimited per-session capacity), not as
-the parameterization Arm 2 would ship.
+**Arm 2 uses the `"diagonal"` parameterization; `"full"` is confirmed
+unworkable when trained jointly.** Model A trained all 45 `"full"`
+day-layer slices (`docs/DATASET.md`; 11.8M of 16.6M total parameters at
+this scale) simultaneously, each against hundreds of training trials,
+with no anchor toward identity — and diverged (`docs/FINDINGS.md`:
+"Model A's initial result and divergence", "Day layers are unstable when
+trained jointly across many sessions"). The round-5 s15 comparison
+confirmed this is a **parameterization** failure, not a mechanism
+failure or an anchor-strength failure: `"full"` diverged again even with
+the identity-anchored penalty at `λ=3000` (train loss rose 1.4 → 3.5
+over training), while `"diagonal"` (1,024 params/session — per-channel
+gain and offset only) trained stably to full PER parity with a
+no-day-layer model, its slices never leaving `max|W−I| ≈ 0.04` of
+identity. `"diagonal"` is therefore the parameterization Arm 2 ships;
+`"full"` is retained only as an UPPER-BOUND comparison (PER recovery
+available with unlimited per-session capacity), and `"lowrank"`
+(16,896 params/session) is implemented but untested. That the lean
+parameterization is both the stable one AND the one fittable from 10–50
+labelled sentences is a direct de-risking of Arm 2 at small N.
 
-**Task 3's comparison deepens this from "which parameterization" to
-"whether day layers should be used at all."** A five-way comparison on
-`temporal_s01_s15_switchboard` (baseline; + identity-anchored penalty;
-+ patching; + both; day layers removed entirely) found the no-day-layer
-control beats every day-layer variant on both best val PER (0.2001 vs.
-the best day-layer variant's 0.2641) and training stability
-(`docs/FINDINGS.md`: "Task 3 architecture comparison"). This is recorded
-as an open question, not resolved here: it directly undercuts Arm 2's
-premise (there is no day-layer mechanism to recalibrate if the shipped
-architecture doesn't use one), but the comparison above was run on s15
-only (3,150 trials, ~14 of 45 sessions active) — whether the same
-result holds at the official split's full scale, and what it implies
-for Arm 2's continued relevance, is a decision for the next round, not
-one made unilaterally by this comparison alone. The checked-in default
-(`configs/experiment/switchboard_baseline.yaml`: `use_day_layers: true`)
-is deliberately left unchanged pending that decision.
+**Day layers are KEPT in the primary architecture (decided by a
+pre-registered rule).** Round-4's five-way s15 comparison appeared to
+show a no-day-layer model beating every day-layer variant, which would
+have undercut Arm 2's premise entirely. Round 5 re-ran the comparison
+properly — at 150 epochs (round-4's no-day-layer run had not converged,
+its best epoch was 98 of 100) and including the previously-missing
+patching + `"diagonal"` day-layer combination — under a keep/drop rule
+fixed and committed *before* the results were read (`docs/FINDINGS.md`:
+"Pre-committed rule for keeping or dropping day layers"). Outcome: the
+best day-layer config (patched, `"diagonal"`, λ300) reached val PER
+**0.16932** vs. **0.1697** for the best no-day-layer config — a
+**−0.0004** gap, i.e. the day-layer model was marginally *better*, and
+the gap is ~1/75th of the rule's 0.03 threshold. The day-layer
+mechanism costs nothing once parameterized correctly, so it stays, and
+Question 3's Arm 2 and the +0.313 day-layer-gap finding both stand.
 
 ---
 
@@ -425,10 +425,11 @@ literature), `judgment call` (reasonable given constraints, not derived),
 | `n_classes` | 41 | — | CTC blank (0) + 39 ARPABET phonemes (1–39) + silence (40); verified against `seq_class_ids`. | fixed by data |
 | `input_dropout` | 0.0 | — | Off by default; channel dropout simulating electrode failure is a later ablation, not a training default — enabling it now would confound the baseline. | judgment call |
 | `n_features` | 512 | — | 256 threshold-crossing + 256 spike-band-power channels at 20 ms bins; not tunable. | fixed by data |
-| `patch_size` | 1 (no-op default) | 14 (7,168-dim GRU input) | `1` disables patching; `14` matches the published pipeline's bin concatenation. Implemented and tested (`tests/test_patching.py`) this round — `unfold`-based, applied after smoothing, before the GRU. `ctc_input_lengths` divides accordingly before `nn.CTCLoss` (`CLAUDE.md`'s "known pitfalls"); verified against every s15 train+val trial. On s15, `patch_size=14` alone (Task 3 run C) improved over the unpatched baseline but did not beat removing day layers (`docs/FINDINGS.md`: "Task 3 architecture comparison") — untested combined with `use_day_layers: false`, the cheapest open experiment. | judgment call — 1 is the current default; 14 tested but not adopted |
-| `patch_stride` | 1 (no-op default) | 4 | Paired with `patch_size`; see above. | judgment call — same status as `patch_size` |
-| `day_layer_penalty` | 0.0 (off by default) | n/a (published checkpoint's day layers are unregularized toward identity, per the checkpoint inspection) | Identity-anchored regularization (`DayLayers.identity_penalty()`) for `use_day_layers=True`, needed because ordinary weight decay pulls toward zero — the wrong no-op point for a per-session correction whose no-op is the identity matrix (`docs/FINDINGS.md`: "Model A's initial result and divergence"). `lambda=300` measured (not guessed) to contribute ~0.11%/3.26%/7.53% of total loss at epochs 1/5/10 on real s15 data (`docs/FINDINGS.md`: "Choosing the identity-anchored day-layer penalty's lambda") — used for the Task 3 comparison, not the checked-in baseline default. | judgment call — lambda measured against one run; helps stability but did not beat removing day layers entirely on s15 |
-| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). **Caveat (2026-09-09):** Task 3's five-way s15 comparison found `use_day_layers: false` beats every day-layer variant tried, including the identity-anchored-penalty and patching combinations (`docs/FINDINGS.md`: "Task 3 architecture comparison"; section 5 above records the Arm 2 consequence). Kept at `principled`/`True` here — this comparison alone does not settle whether to change the project default, only that it's an open question requiring a considered decision, not a routine config change. | principled (caveat above) |
+| `patch_size` | 14 | 14 (7,168-dim GRU input) | Concatenate 14 consecutive 20 ms bins into one GRU input vector, matching the published pipeline. `unfold`-based, applied after smoothing, before the GRU (`tests/test_patching.py`); `ctc_input_lengths` divides lengths to the patched axis before `nn.CTCLoss` (`CLAUDE.md`'s "known pitfalls"), verified against every s15 train+val trial. Round-5 s15 comparison: patching cut val PER from the ~0.196–0.200 no-patch plateau to ~0.169–0.170 (`docs/FINDINGS.md`: "Day layers are unstable when trained jointly across many sessions"). `1` (no-op) remains available for an ablation. | principled |
+| `patch_stride` | 4 | 4 | Step the 14-bin window every 4 bins (80 ms output stride — the published real-time phoneme rate). Paired with `patch_size`; both read from `self`, so `_patch` and `ctc_input_lengths` cannot disagree. | principled |
+| `day_layer_parameterization` | `"diagonal"` | `"full"` (512×512 per session) | Per-channel gain+offset only, 1,024 params/session vs. `"full"`'s 262,656. `"full"` **diverges** when all 45 session slices train jointly, even at `day_layer_penalty=3000` (`docs/FINDINGS.md`: "Day layers are unstable when trained jointly across many sessions"); `"diagonal"` is stable and reached full PER parity with the no-day-layer config on s15, with slices staying within `max|W−I| ≈ 0.04` of identity after 150 epochs. It is also the parameterization Arm 2 (`docs/DESIGN.md` section 5) can realistically fit from 10–50 labelled sentences. `"lowrank"` remains implemented and untested. | judgment call — `"full"` matches the published checkpoint but is unworkable jointly at this scale |
+| `day_layer_penalty` (λ) | 300.0 | n/a (published checkpoint's day layers are unregularized) | Weight on `DayLayers.identity_penalty()`, added to the CTC loss. The penalty is **Ridge-style in form** (a squared Frobenius norm of the per-session weight deviation plus a squared-L2 bias term) **but its shrinkage target is the identity matrix `I`, not `0`** — pulling a day layer's weight toward `0` would annihilate its input (`y = x·0 + b`), whereas the no-op transform is `W = I, b = 0`. A plain `weight_decay=1e-4` diagnostic on Model A barely helped for exactly this reason: it regularized toward the wrong point. `λ=300` was measured (not guessed) to contribute ~0.11% / 3.05% / 7.89% of total loss at epochs 1 / 5 / 10 on real s15 data — an anchor, not a dominator; `λ=3000` reaches 46% by epoch 10 and starved the CTC objective (`docs/FINDINGS.md`: "Choosing the identity-anchored day-layer penalty's lambda", "Day layers are unstable…"). With `"diagonal"` the penalty is only lightly load-bearing (slices stay near identity on their own) but is kept for the cut-point sweep's smaller train sets. | judgment call — λ measured against real runs |
+| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). **KEPT by the pre-registered keep/drop rule (`docs/FINDINGS.md`: "Pre-committed rule for keeping or dropping day layers"):** the round-5 s15 comparison's best day-layer config (`"diagonal"`, λ300, patched) reached val PER 0.16932 vs. 0.1697 for the best no-day-layer config — a −0.0004 gap, far inside the rule's 0.03 band (≈3× checkpoint-selection noise). Round-4's apparent no-day-layer advantage was an artifact of comparing an unconverged run against `"full"` day layers; with `"diagonal"` and 150 epochs the mechanism costs nothing. Question 3's Arm 2 and the +0.313 day-layer-gap finding both depend on it. | principled |
 
 **Memory cost of `DayLayers`.** Dense `(n_sessions, n_features,
 n_features)` float32 — 45×512×512×4 bytes ≈ 47 MB, a large fraction of

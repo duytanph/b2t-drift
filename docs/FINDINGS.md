@@ -938,3 +938,94 @@ Arm 2 around a different adaptation mechanism.*
 trained jointly across many sessions"), which also carries the four-way
 comparison's numbers. The rule above is fixed as written; that entry
 only applies it.
+
+---
+
+### Day layers are unstable when trained jointly across many sessions (2026-09-10)
+
+**Question:** Model A (official split, all 45 sessions) diverged with
+`"full"` day layers. Is per-session adaptation itself the problem, or
+the way it is parameterized and trained?
+
+**Method:** (1) Recap of the divergence and the round-4 mitigations.
+(2) A round-5 four-way comparison on `temporal_s01_s15_switchboard`,
+150 epochs each, early stopping disabled, to separate the confounds
+round-4 left open (round-4's winning no-day-layer run had not converged
+-- best epoch 98 of 100 -- and differed from the best day-layer run in
+two ways at once, patching AND day layers, with the patching +
+no-day-layer combination never run):
+
+  1. patching (14/4) + `use_day_layers=False`
+  2. patching (14/4) + `"diagonal"` day layers, `λ=300`
+  3. patching (14/4) + `"full"` day layers, `λ=3000` (10x the round-4 anchor)
+  4. no patching + `use_day_layers=False` (a fair 150-epoch rerun of round-4's E)
+
+**Result -- the instability is a parameterization failure, not a
+mechanism failure.**
+
+*The divergence.* Model A's train loss ROSE from 1.49 to 1.64 between
+epochs 50 and 99 (rising train loss is divergence, not overfitting);
+`grad_norm_mean` (pre-clip) hit 283 / 1176 / 349 / 1006 at epochs
+70 / 72 / 96 / 99; the 45 `"full"` slices reached `mean max|W−I| = 0.806`
+with nothing anchoring them (`docs/FINDINGS.md`: "Model A's initial
+result and divergence").
+
+*The round-4 mitigations.* Identity-anchored regularization improved s15
+val PER from 0.353 (unregularized `"full"`) to 0.303; a plain
+`weight_decay=1e-4` diagnostic did **not** help, because weight decay
+pulls toward `0` and the day-layer no-op point is `I`, not `0` -- pulling
+`W` toward `0` annihilates the input (`y = x·0 + b`). Removing day layers
+entirely was stable and slightly better still on PER.
+
+*The round-5 four-way comparison:*
+
+| # | config | best val PER (epoch) | converged? | final PER @149 | train-loss trend @149 | grad_norm_mean @149 | day-layer `mean|W−I| / max|W−I|` @149 | wall clock |
+|---|---|---|---|---|---|---|---|---|
+| 1 | patch, no day layers | **0.1697 (102)** | yes | 0.1803 | flat (mild rise) | 1.66 | — | 35.9 min |
+| 2 | patch, `"diagonal"` day layers, λ300 | **0.16932 (106)** | yes | 0.1776 | flat (mild rise) | 1.85 | 0.0098 / 0.0410 | 40.2 min |
+| 3 | patch, `"full"` day layers, λ3000 | 0.2509 (38) | best early, then **diverges** | 0.3317 | **rising** (1.4→3.5 from ep25) | 10.70 | 0.1481 / 0.5919 | 42.1 min |
+| 4 | no patch, no day layers | 0.19575 (147) | **no — best in last 10%, upper bound** | 0.1990 | flat | 2.06 | — | 61.6 min |
+
+Reading the table: (a) `"diagonal"` day layers (run 2, 1,024
+params/session) train to full PER parity with a no-day-layer model
+(run 1) -- gap 0.16932 vs 0.1697, i.e. **−0.0004** -- and the slices
+barely leave identity (`max|W−I| ≈ 0.04` after 150 epochs,
+`day_penalty ≈ 7e-5`). (b) `"full"` day layers (run 2 of round 4, and
+run 3 here) destabilize joint training regardless of anchor strength:
+`λ=3000` (measured to contribute 46% of total loss by epoch 10 --
+dominating, not anchoring) did not fix it, it starved CTC instead --
+train loss never fell below ~1.3 and then rose to 3.5, and the slices
+*still* drifted to `max|W−I| ≈ 0.59` because `identity_penalty`
+normalizes by `n_features²` so the per-element pull stays weak even as
+the scalar loss term dominates. (c) Patching is what moves PER off the
+~0.196–0.200 no-patch plateau (run 4, itself not even converged at
+ep149) down to ~0.169–0.170.
+
+**The tension, stated plainly.** A *trained* `"full"` day layer helps
+its own session by **+0.313 PER** (the identity-day-layer redirect
+control, `docs/FINDINGS.md`) -- a large, real effect. Yet training all
+45 `"full"` slices *jointly* HURTS overall PER and destabilizes the run.
+Both are true: the per-session correction is worth having, but the
+262,656-parameter-per-session `"full"` parameterization is the wrong way
+to carry it at this scale. The 1,024-parameter `"diagonal"`
+parameterization keeps the benefit (session-parity PER, and it is what
+Arm 2 fits from 10–50 sentences) without the instability.
+
+**This is a real engineering problem for deployed speech BCIs, not a
+quirk of this codebase.** Per-session / per-day input adaptation is
+standard practice in this field (the published baseline ships 45
+per-session `day_weights`/`day_biases`). That a full-rank version of it
+*destabilizes joint training across sessions* -- and that the fix is to
+constrain the parameterization, not to regularize harder -- is not, to
+our knowledge, reported.
+
+**Consequence:** applying the pre-registered rule (previous entry):
+best day-layer PER 0.16932 (run 2) − best no-day-layer PER 0.1697
+(run 1) = **−0.0004**, far inside the 0.03 band. **Day layers are KEPT**,
+with `day_layer_parameterization: "diagonal"` and `day_layer_penalty:
+300`. `configs/experiment/switchboard_baseline.yaml` now sets
+`patch_size: 14, patch_stride: 4, use_day_layers: true,
+day_layer_parameterization: diagonal, day_layer_penalty: 300.0,
+max_epochs: 150, patience: 150`. `docs/DESIGN.md` sections 5 and 10 are
+updated to the resolved decision; the round-4 "open question about
+whether to keep day layers at all" is closed.
