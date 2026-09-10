@@ -308,6 +308,112 @@ class DayLayers(nn.Module):
         mask[self._active_session] = 1.0
         return grad * mask
 
+    def _weight_deviation(self) -> torch.Tensor:
+        """Per-session deviation from identity, for whichever transform
+        this instance's own PER-SESSION WEIGHT (never bias) parameter
+        represents.
+
+        Shape depends on `parameterization`:
+          "full"     -- `(n_sessions, n_features, n_features)`, `W[s] - I`.
+          "diagonal" -- `(n_sessions, n_features)`, `scale[s] - 1` (a
+              vector -- diagonal has no off-diagonal entries to deviate
+              from identity in the first place).
+          "lowrank"  -- `(n_sessions, n_features, n_features)`, `U[s] @
+              V[s]` -- since `W[s] = I + U[s] @ V[s]` (this class's own
+              `forward` docstring), the deviation from identity IS the
+              `U @ V` product, without ever materializing `W[s]` itself.
+
+        Shared by `identity_penalty` and `weight_deviation_stats` so both
+        compute the deviation exactly once, the same way.
+        """
+        if self.parameterization == "full":
+            identity = torch.eye(self.n_features, device=self.weights.device, dtype=self.weights.dtype)
+            return self.weights - identity
+        if self.parameterization == "diagonal":
+            return self.scale - 1.0
+        return torch.bmm(self.U, self.V)  # "lowrank"
+
+    def identity_penalty(self) -> torch.Tensor:
+        """Squared-deviation-from-identity regularization term, UNWEIGHTED
+        (no lambda applied here -- callers apply their own weight).
+
+            L_day = mean_s ||W[s] - I||_F^2 / n_features^2
+                  + mean_s ||b[s]||_2^2      / n_features
+
+        WHY THIS, NOT `weight_decay`. `weight_decay` (Adam's own, or an
+        L2 term added by hand) pulls every parameter toward ZERO. For a
+        day layer, `W[s] = 0` does not mean "no correction" -- it means
+        "annihilate the input entirely" (`y = x @ 0 + b`). The no-op
+        transform is `W[s] = I, b[s] = 0` (this class's own identity
+        init -- see the module docstring's "WHY IDENTITY INIT"), so the
+        penalty must pull toward `I`, not `0`. A `weight_decay=1e-4`
+        diagnostic on Model A barely helped for exactly this reason (see
+        `docs/FINDINGS.md`) -- it was regularizing toward the wrong point.
+
+        NORMALIZED BY ELEMENT COUNT, not just session count, so the same
+        `lambda` means the same thing regardless of `n_features` or
+        `n_sessions` (a model swept across `hidden_size` or evaluated at
+        a different `n_sessions` should not need `lambda` re-tuned purely
+        because the parameter counts changed). The weight term's divisor
+        differs by `parameterization` because `_weight_deviation()`'s
+        shape does: `n_features^2` for "full"/"lowrank" (a full
+        `n_features x n_features` matrix, in output shape, even for
+        "lowrank"'s rank-constrained product), `n_features` for
+        "diagonal" (a length-`n_features` VECTOR, no off-diagonal terms
+        to begin with, so its element count is n_features -- confirmed by
+        `mean_s ||scale[s]-1||^2` reducing to `mean_s ||diag(scale[s]) -
+        I||_F^2`, since the off-diagonal entries of both `diag(scale[s])`
+        and `I` are zero and contribute nothing to the Frobenius sum).
+        The bias term's divisor is always `n_features` (biases are always
+        a length-`n_features` vector, for every `parameterization`).
+
+        Returns:
+            A scalar (0-dim) tensor, differentiable with respect to every
+            per-session parameter this instance owns. `train_one_epoch`
+            multiplies this by its own `day_layer_penalty` (lambda)
+            before adding it to the training loss -- this method never
+            applies a weight itself, so the SAME raw value is meaningful
+            both for that weighted use and for pure diagnostic logging
+            (`metrics.csv`'s `day_penalty` column) regardless of whether
+            the penalty is actually being trained against.
+        """
+        n = self.n_features
+        deviation = self._weight_deviation()
+        if self.parameterization == "diagonal":
+            weight_term = (deviation.pow(2).sum(dim=1) / n).mean()
+        else:
+            weight_term = (deviation.pow(2).sum(dim=(1, 2)) / (n * n)).mean()
+        bias_term = (self.biases.pow(2).sum(dim=1) / n).mean()
+        return weight_term + bias_term
+
+    def weight_deviation_stats(self) -> tuple[float, float]:
+        """`(mean, max)` of each session's own MAX absolute deviation from
+        identity, across all `n_sessions` slices.
+
+        Per-session max first (the single largest-magnitude entry within
+        that session's own transform), THEN averaged/maxed across
+        sessions -- e.g. "mean max|W-I| = 0.806, max = 0.992" is read as
+        "the typical session's worst single entry is 0.806 away from
+        identity, and the single worst entry anywhere (any session, any
+        position) is 0.992 away." Matches the convention already used to
+        characterize Model A's divergence (`docs/FINDINGS.md`), so a
+        value logged here is directly comparable to that investigation's
+        numbers. Uses the same `_weight_deviation()` as `identity_penalty`
+        (WEIGHTS only -- `scale`/`W`/`U@V`, never `biases`; call
+        `.biases.abs()` directly if a bias-deviation statistic is ever
+        needed).
+
+        Returns:
+            `(mean_max_abs_deviation, overall_max_abs_deviation)`, both
+            plain Python floats (not tensors) since this is read-only
+            diagnostic logging (`training/loop.py`'s `fit`), never part
+            of a loss.
+        """
+        deviation = self._weight_deviation()
+        reduce_dims = tuple(range(1, deviation.dim()))  # every dim except session (dim 0)
+        per_session_max = deviation.abs().amax(dim=reduce_dims)  # (n_sessions,)
+        return per_session_max.mean().item(), per_session_max.max().item()
+
     def freeze_all_except(self, session_index: int) -> None:
         """Restrict future gradient updates to one session's slice only.
 

@@ -88,6 +88,7 @@ def train_one_epoch(
     epoch: int = 0,
     sampler: LengthBucketedSampler | None = None,
     loggers: RunLogger | None = None,
+    day_layer_penalty: float = 0.0,
 ) -> dict[str, Any]:
     """Run one training epoch.
 
@@ -134,6 +135,19 @@ def train_one_epoch(
             called once per (non-skipped) batch with a running
             `{"batch_loss": ...}`, giving a fine-grained loss curve
             distinct from `fit`'s once-per-epoch summary logging.
+        day_layer_penalty: Weight (lambda) for
+            `model.day_layers.identity_penalty()`, added to the CTC loss
+            BEFORE `.backward()` on every step -- `loss = ctc_loss +
+            day_layer_penalty * model.day_layers.identity_penalty()`.
+            Default `0.0`: no penalty, byte-for-byte the same training
+            objective as before this existed. A no-op (not even computed)
+            when `model.day_layers is None` (e.g. `use_day_layers=False`)
+            regardless of this value, since there is nothing to
+            regularize. See `DayLayers.identity_penalty`'s docstring for
+            why this anchors toward IDENTITY rather than zero (unlike
+            `weight_decay`, which is the wrong regularizer for a
+            per-session correction whose no-op point is the identity
+            transform, not the zero matrix -- `docs/FINDINGS.md`).
 
     Returns:
         A dict with keys:
@@ -216,6 +230,17 @@ def train_one_epoch(
 
         ctc_lengths = model.ctc_input_lengths(batch["input_lengths"])
         loss = criterion(log_probs, batch["targets"], ctc_lengths, batch["target_lengths"])
+
+        # day_layer_penalty added to the CTC loss BEFORE backward, so it
+        # actually participates in the gradient -- see this function's
+        # docstring entry. Gated on `model.day_layers is not None` since
+        # there's nothing to regularize when day layers are disabled;
+        # the DETECTION block just below deliberately still uses the
+        # CTC-only `raw_per_item_loss` (via `log_probs`, unaffected by
+        # this), since the penalty term is bounded and well-behaved by
+        # construction and has no failure mode this check is for.
+        if day_layer_penalty > 0 and getattr(model, "day_layers", None) is not None:
+            loss = loss + day_layer_penalty * model.day_layers.identity_penalty()
 
         # DETECTION IS SEPARATE FROM THE REAL LOSS, ON PURPOSE. With
         # zero_infinity=True (as criterion is expected to be), an
@@ -539,6 +564,7 @@ def fit(
     train_sampler: LengthBucketedSampler | None = None,
     loggers: list[RunLogger] | None = None,
     config: dict[str, Any] | None = None,
+    day_layer_penalty: float = 0.0,
 ) -> dict[str, Any]:
     """Run the full train/eval loop with early stopping and checkpointing.
 
@@ -600,6 +626,19 @@ def fit(
             into every checkpoint (`training.checkpoint.save_checkpoint`)
             so each one is self-describing. Defaults to `{}` if not
             given.
+        day_layer_penalty: Passed straight through to `train_one_epoch`
+            each epoch. Also controls three EXTRA `metrics.csv` columns,
+            `day_penalty`, `day_layer_mean_max_weight_dev`,
+            `day_layer_max_weight_dev` (`DayLayers.identity_penalty()`
+            and `.weight_deviation_stats()`, read from `model.day_layers`
+            AFTER each epoch's training, i.e. "value at the end of this
+            epoch") -- these are logged whenever `model.day_layers is not
+            None`, regardless of whether `day_layer_penalty > 0`, since
+            they are a cheap read of existing state and useful to see
+            drift away from identity even when nothing is actively
+            pulling it back (e.g. the `A` baseline run in the Task 3
+            comparison this exists for). `None` in all three columns when
+            `model.day_layers is None`.
 
     Returns:
         A summary dict with keys `"best_epoch"`, `"best_val_per"`,
@@ -631,11 +670,24 @@ def fit(
             model, train_loader, optimizer, criterion, device,
             scaler=scaler, grad_clip=grad_clip, epoch=epoch,
             sampler=train_sampler, loggers=batch_loggers,
+            day_layer_penalty=day_layer_penalty,
         )
         eval_result = evaluate(model, val_loader, criterion, device, compute_per=True)
 
         if scheduler is not None:
             scheduler.step()
+
+        # Read AFTER this epoch's training, i.e. "day-layer state at the
+        # end of epoch N" -- see fit's day_layer_penalty docstring entry
+        # for why this is logged whenever day_layers exist, not only when
+        # the penalty is actively applied.
+        if getattr(model, "day_layers", None) is not None:
+            day_penalty = model.day_layers.identity_penalty().item()
+            day_layer_mean_max_weight_dev, day_layer_max_weight_dev = model.day_layers.weight_deviation_stats()
+        else:
+            day_penalty = None
+            day_layer_mean_max_weight_dev = None
+            day_layer_max_weight_dev = None
 
         row = {
             "epoch": epoch,
@@ -651,6 +703,9 @@ def fit(
             "val_blank_fraction": eval_result["blank_fraction"],
             "val_decoded_length_ratio": eval_result["decoded_to_reference_length_ratio"],
             "val_n_distinct_decoded_tokens": len(eval_result["decoded_token_counts"]),
+            "day_penalty": day_penalty,
+            "day_layer_mean_max_weight_dev": day_layer_mean_max_weight_dev,
+            "day_layer_max_weight_dev": day_layer_max_weight_dev,
         }
         epoch_loggers.log_scalars(epoch, row)
 
@@ -669,6 +724,9 @@ def fit(
             "val_blank_fraction": eval_result["blank_fraction"],
             "val_decoded_length_ratio": eval_result["decoded_to_reference_length_ratio"],
             "val_n_distinct_decoded_tokens": len(eval_result["decoded_token_counts"]),
+            "day_penalty": day_penalty,
+            "day_layer_mean_max_weight_dev": day_layer_mean_max_weight_dev,
+            "day_layer_max_weight_dev": day_layer_max_weight_dev,
         }
         save_checkpoint(
             run_dir / "checkpoint_last.pt", model, optimizer, epoch,

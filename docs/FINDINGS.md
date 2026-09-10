@@ -554,3 +554,346 @@ choice would be to exactly the kind of single-run overfitting this project's
 validation philosophy (`CLAUDE.md`) exists to avoid. `checkpoint_best.pt`
 already selects the best epoch independent of run length, so there is no
 accuracy cost to running the full 100 epochs instead.
+
+---
+
+### Model A's initial result and divergence (2026-09-08)
+
+**Question:** Does the current pipeline, trained on the official split
+(all 45 sessions, all corpora), reproduce the published baseline's
+`val_PER=0.101` (`docs/FINDINGS.md`: "Block count decreases over the
+recording...")?
+
+**Method:** Trained Model A (`docs/DESIGN.md` section 3) on
+`splits/official.json`, current architecture unchanged (3 layers, 512
+hidden, no patching), 100 epochs, early stopping disabled.
+
+**Result:** Best val PER **0.5009 at epoch 18**, rising to **0.5692 by
+epoch 99** -- not a plateau. Train loss itself ROSE from **1.49 to 1.64
+between epochs 50 and 99** (not overfitting -- overfitting is falling
+train loss with rising val loss; rising train loss is divergence).
+`grad_norm_mean` (the mean PRE-clip gradient norm -- see the next entry
+for why this is the correct number to read): **283 / 1176 / 349 / 1006**
+at epochs **70 / 72 / 96 / 99** respectively.
+
+**Consequence:** `0.5009` is far above both the "pipeline correct,
+architecture nearly matches" band (0.10-0.15) and the "meaningfully
+weaker architecture" band (0.20-0.30) -- squarely in "something is
+wrong" territory. The exploding-then-shrinking `grad_norm_mean` pattern
+and the late rise in train loss motivated the gradient-clipping audit
+(next entry) and the day-layer divergence investigation this round's
+Task 1/3/4 resolve -- see "This round's Tasks 1-4 results" below for the
+diagnosis (unregularized day layers) and the retrained result.
+
+---
+
+### The gradient-clipping audit found no defect (2026-09-09)
+
+**Question:** Model A's `grad_norm_mean` reaching four figures despite
+`grad_clip=1.0` -- is gradient clipping actually being applied, or is
+`grad_norm_mean` silently reporting something else?
+
+**Method:** Read `train_one_epoch` line by line: (a) is
+`clip_grad_norm_` called every step, or conditionally; (b) does
+`scaler.unscale_(optimizer)` precede it when AMP is in use; (c) is
+`grad_norm_mean` the return value of `clip_grad_norm_` (documented as the
+PRE-clip norm) or something recomputed after clipping; (d) is
+`grad_clip` actually read from config and threaded through, or silently
+defaulting. Then verified empirically: forced a large gradient (a
+`nn.Linear` with weights deliberately scaled up) through the exact
+`scale -> backward -> unscale_ -> clip -> step` sequence with AMP
+enabled, and measured the actual gradient norm immediately before
+`optimizer.step()`.
+
+**Result:** All four code-reading questions came back clean: (a)
+`clip_grad_norm_` runs on every non-skipped step, no condition beyond
+the (unrelated) non-finite-loss skip; (b) `scaler.unscale_(optimizer)`
+correctly precedes it; (c) `grad_norm_mean` IS `clip_grad_norm_`'s
+return value, which PyTorch documents as the PRE-clip norm by design --
+a large logged value is expected, not evidence of broken clipping; (d)
+`grad_clip=1.0` is read from config and passed through
+`02_train.py -> fit() -> train_one_epoch()` explicitly, no silent
+default. Empirically: with a forced pre-clip norm of **102.59**, the
+ACTUAL gradient norm immediately before `optimizer.step()` measured
+**0.99999994** (~1.0, i.e. clipping worked exactly as intended).
+Separately confirmed `scaler.step()` correctly no-ops on a genuine fp16
+overflow (model weights unchanged, `GradScaler`'s scale factor shrinks
+on the next `update()`).
+
+**Consequence:** No defect. Model B's drift-curve numbers (the 0.353
+s15 baseline and everything built on it) are unaffected -- they were
+never in question, but are recorded as unaffected here explicitly, since
+a reader seeing four-figure gradient norms in `metrics.csv` without this
+entry would otherwise reasonably suspect the opposite.
+
+---
+
+### The confounded substitution rate and its correction (2026-09-09)
+
+**Question:** Deletion rate rose `+0.049`/100d while (reference-length-
+normalized) substitution rate FELL `-0.021`/100d across the 22-session
+drift curve -- read at the time as evidence for "channels going quiet"
+over "phoneme-to-channel mapping shifting" (`docs/DESIGN.md` section 4).
+Does that comparison actually distinguish the two hypotheses?
+
+**Method:** Noted that `substitution_rate` (substitutions / reference
+length) can only fall as EMISSION falls, mechanically, regardless of
+whether tuning changed: a substitution can only occur where the model
+emitted a token, and `decoded_to_reference_length_ratio` (emission) falls
+with elapsed time on this curve -- so both rates move together by
+construction, confounding the comparison. Added
+`substitution_rate_among_emitted = substitutions / (substitutions +
+n_correct)` (`metrics.per_session_metrics`) -- substitutions as a
+fraction of COMMITMENTS (right or wrong), independent of how often the
+model commits at all -- and recomputed the slope.
+
+**Result:** Corrected `substitution_rate_among_emitted` slope is
+**flat**: `-0.0027`/100d over all 22 sessions, `+0.0010`/100d over the 17
+passing-threshold sessions -- both an order of magnitude smaller than
+the old confounded `substitution_rate` slope (`-0.021`/100d) and than
+`deletion_rate`'s slope (`+0.049`/100d), and opposite in sign between
+the two subsets (noise, not a trend). Mean
+`substitution_rate_among_emitted` across the 22 sessions: **0.428** (std
+**0.031**) -- roughly 43% of committed phonemes are wrong, essentially
+constant across the whole 546-day range.
+
+**Consequence:** The attribution conclusion survives the correction
+(deletions rising while substitution-among-emitted stays flat still
+points at channels going quiet / SNR loss over tuning change), but now
+rests on defensible footing instead of a mechanically confounded
+comparison. `substitution_rate_among_emitted` and `n_correct` are now
+standard columns in `03_evaluate.py`'s CSV and `per_session_metrics`'s
+output, not a one-off recomputation.
+
+---
+
+### The effective-signal control: the drift curve stops measuring degradation partway through (2026-09-09)
+
+**Question:** At +546 days, real-feature PER (0.857) and shuffled-feature
+PER (0.869, features replaced with a length-compatible donor trial from
+the same session, targets unchanged) differ by only 0.012 -- does the
+decoder ever meaningfully stop using neural information within the
+observed 5-to-546-day range, and if so, when?
+
+**Method:** `effective_signal = PER_shuffled - PER_real`, computed
+per session across all 22 evaluable held-out sessions
+(`scripts/03_evaluate.py --shuffled-control`), with a paired bootstrap
+CI (`bootstrap_paired_difference_ci`) since real and shuffled PER are
+computed on the identical trials.
+
+**Result:** `effective_signal` is **0.1478 at +5d**, falls to **0.0248
+by +75d** (first session below the 0.05 threshold), and is
+**statistically indistinguishable from zero by +453d** (`-0.0029`, 95%
+CI `[-0.0149, 0.0089]`). Descriptive linear fit: **-0.0140** per 100
+days. Degenerate baselines establish the actual PER ceiling for
+context: an empty hypothesis (all deletions) scores exactly **1.000**
+(confirmed exactly, both tested sessions); a constant-silence hypothesis
+(collapses to one token under greedy CTC decoding) scores
+**0.962-0.966**; a genuinely non-functional decoder on this task
+therefore scores roughly **0.87**, not 1.0 -- which is why
+`effective_signal` (shuffled vs. real), not raw PER against 1.0, is the
+correct null to compare against.
+
+**Consequence:** **The drift curve stops measuring degradation and
+starts measuring failure at roughly day 75** -- 471 of the 546 observed
+days (86% of the range) show a decoder gaining essentially nothing from
+receiving the correct brain data over a wrong trial's. Every PER value
+reported for sessions beyond ~day 75 should be read as "the decoder has
+stopped extracting usable signal here," not as a point on a graceful
+degradation curve. `docs/DESIGN.md` records `effective_signal` as a
+standard reported metric and the s15 cut point's coverage-gap
+implication -- see that file.
+
+---
+
+### The identity-day-layer redirect control: the missing day layer explains the +5-day gap (2026-09-09)
+
+**Question:** Validation PER on held-in sessions is 0.353; PER on the
+earliest held-out session, only 5 days later, is 0.652 -- a 0.299 gap
+too large to be electrode drift over 5 days. Two confounded causes: no
+trained day layer (identity fallback) AND the session being unseen.
+
+**Method:** For 3 training sessions with substantial Switchboard trial
+counts, evaluated each session's own validation trials twice: normally
+(trained day-layer slice), and with `session_indices` redirected (at
+evaluation time only, never touching the saved checkpoint) to a held-out
+session's index -- verified exact identity, zero bias. Same trials,
+same everything else; only which day-layer slice applies differs.
+
+**Result:** Average PER difference (identity minus trained), across the
+3 sessions: **+0.313** -- essentially the ENTIRE 0.299 val-to-+5-day gap
+(the identity-redirect penalty slightly exceeds it). Checkpoint file
+confirmed byte-identical (sha256) before and after.
+
+**Consequence:** **The missing day layer, not the session being unseen,
+accounts for the +5-day gap.** This directly informs Question 3
+(`docs/DESIGN.md` section 5): fitting a new day layer (Arm 2) on a
+handful of labeled sentences should recover most of the gap, making that
+the headline Arm 2 result rather than a supporting one -- see
+`docs/DESIGN.md`'s Question 3 section for the consequence of this being
+LARGER than the observed 18-month drift itself.
+
+---
+
+### The full 22-session drift curve: rapid early rise, then a flat plateau (2026-09-09)
+
+**Question:** What does the s15 checkpoint's PER actually look like
+across all 22 evaluable held-out sessions (not just the 2 endpoints), and
+is the shape consistent with smooth continuous decay?
+
+**Method:** `scripts/03_evaluate.py` (default: all held-out sessions,
+`passes_threshold` recorded per row, not baked into which sessions run)
+against the s15 diagnostic checkpoint (`checkpoint_best.pt`, epoch 92,
+val PER 0.353), then `04_drift_curve.py`.
+
+**Result:** PER at the earliest passing session (+5d) is **0.6522**;
+at the latest (+546d), **0.8567**. Absolute change **+0.2045**,
+descriptive linear-fit slope **+0.0278** PER per 100 days across all 22
+points. **The shape is NOT smooth decay**: an early segment (days <=150,
+n=8) has slope **+0.114**/100d; the late segment (days >150, n=14) has
+slope **+0.013**/100d -- an order of magnitude flatter. Mean PER
+<=150d: 0.750; >150d: 0.842 (std 0.036).
+
+**Consequence:** Most of the observed PER change happens in the first
+~150 days; the remaining ~400 days are a noisy plateau, not continued
+decline. Read alongside the effective-signal entry above: the plateau
+region substantially overlaps the region where `effective_signal` has
+already collapsed toward zero, consistent with the plateau being a
+floor (decoder no longer extracting much signal) rather than a slowing
+but still-real decline.
+
+---
+
+### Choosing the identity-anchored day-layer penalty's lambda (2026-09-09)
+
+**Question:** `DayLayers.identity_penalty()` (`L_day`, `docs/DESIGN.md`
+section 5) needs a weighting lambda. Weight decay pulls toward zero, the
+wrong no-op point for a per-session correction whose no-op is the
+identity matrix, motivating this penalty -- but the identity-anchoring
+formula still needs a real magnitude, not a guess.
+
+**Method:** Instrumented one real training run on
+`temporal_s01_s15_switchboard` (`scratch/task1_lambda_diagnostic.py`):
+computed `raw_penalty = model.day_layers.identity_penalty()` every step
+WITHOUT applying it to the loss, logging it alongside the real CTC loss
+for the first 20 steps and mean values at epochs 1, 5, 10. Since the
+penalty is never applied in this diagnostic run, `day_layers` drift
+unconstrained -- the measured raw_penalty is an UPPER BOUND on what a run
+that actually applies the penalty would see (an anchored run should hold
+weights closer to identity, producing a smaller raw_penalty at the same
+epoch).
+
+**Result:** At epoch 5, mean CTC loss **2.8091**, mean raw (unweighted)
+penalty **3.154027e-04**. Steps 0-4 show `raw_penalty` exactly 0.0 (a
+freshly-initialized `DayLayers` starts exactly at identity). Percentage
+of total loss contributed by the penalty term at candidate lambda values,
+computed from these raw magnitudes: lambda=300 gives **~0.11%** of total
+loss at epoch 1, **~3.26%** at epoch 5, **~7.53%** at epoch 10 -- growing
+but not dominating, and landing inside the targeted 1-10%-at-epoch-5
+band.
+
+**Consequence:** **lambda = 300**, recorded in
+`configs/experiment/switchboard_baseline.yaml` (`training.day_layer_penalty`,
+default 0.0 -- 300 is the value used for the Task 3 comparison's B and D
+runs specifically, not a change to the checked-in baseline default this
+round). See the next entry for how this alt performed against the
+non-instrumented alternatives.
+
+---
+
+### Task 3 architecture comparison: removing day layers entirely outperforms every regularization/patching variant on s15 (2026-09-09)
+
+**Question:** Given Model A's divergence (unregularized day layers,
+mean max|W-I| reaching 0.806) and the published baseline's patched input
+(`patch_size=14, patch_stride=4`, 7,168-dim GRU input vs. this project's
+plain 512-dim), which combination of (a) the identity-anchored day-layer
+penalty (lambda=300, previous entry) and (b) input patching actually
+helps, on `temporal_s01_s15_switchboard` -- a configuration tuned against
+the 8,072-trial official split may not suit s15's 3,150 trials, so this
+comparison was run on s15 specifically before committing anything to the
+official-split retrain.
+
+**Method:** Five 100-epoch runs, early stopping disabled, otherwise
+identical hyperparameters: (A) current baseline (day layers,
+unconstrained, no patching) -- already measured, see "Model A's initial
+result and divergence" above (that entry is the official-split case;
+here A is the analogous s15-scale run, `runs/diag_s15_100ep_nostop`); (B)
++ identity-anchored day-layer penalty only; (C) + patching only
+(`patch_size=14, patch_stride=4`); (D) + both; (E) day layers removed
+entirely (`use_day_layers: false`) as a control.
+
+**Result:**
+
+| config | best val PER (epoch) | final val PER (@99) | train loss trend @99 | grad_norm_mean @25/50/99 | day_penalty/mean\|W-I\|/max\|W-I\| @99 | total_seconds |
+|---|---|---|---|---|---|---:|
+| A baseline | 0.3529 (92) | 0.3712 | falling to ep92, slight uptick to 99 | 3.26 / 2.55 / 5.53 | 0.005352 / 0.1588 / 0.5692 | ~2076.5 |
+| B +penalty | 0.3027 (81) | 0.3082 | flat | 3.72 / 2.79 / 3.22 | 0.0014 / 0.1787 / 0.7207 | 2162.8 |
+| C +patching | 0.2823 (75) | 0.3014 | flat (val_loss/grad_norm creeping up) | 2.82 / 4.45 / 5.98 | 0.0058 / 0.2122 / 0.8673 | 1505.6 |
+| D +both | 0.2641 (32) | 0.2896 | **rising** (+29% ep50->99) | 3.07 / 3.45 / 6.39 | 0.0020 / 0.1994 / 0.8069 | 1485.6 |
+| E no day layers | **0.2001 (98)** | 0.2081 | falling | 3.99 / 1.89 / 2.84 | n/a | 1786.9 |
+
+E's best epoch (98) lands almost at the very end of training with train
+loss still falling and the lowest, flattest `grad_norm_mean` of any run
+-- not an early peak followed by drift, unlike D (best epoch 32, then
+train loss rises 29% while it keeps training, though its val PER stays
+roughly flat/mildly worse). Notably, on s15, B's day-layer deviation
+magnitude (mean max|W-I|=0.1787) is comparable to or slightly *larger*
+than A's (0.1588) -- the penalty's benefit over A here is optimization
+stability, not simply a smaller deviation magnitude. (s15's baseline A
+never diverged as severely as the official-split Model A to begin with:
+only ~14 of 45 day-layer slices train on s15's ~14 active sessions,
+against all 45 on the official split.)
+
+**Consequence:** **Configuration E (day layers removed) is the winner:
+best PER by a wide margin (24% relative improvement over the next-best,
+D) and the most stable training of the five runs.** Used for
+`splits/official.json`'s Model A retrain (next entry). This finding
+requires flagging plainly: **removing day layers eliminates the
+mechanism Question 3's Arm 2 (day-layer-based recalibration) depends on**
+-- every day-layer variant (A/B/C/D) underperforms the no-day-layer
+control on s15, deepening the open question from "which day-layer
+parameterization" to "whether day layers earn their complexity in this
+architecture at all." This is recorded as an open question for
+`docs/DESIGN.md` section 5, not resolved unilaterally here --
+`configs/experiment/switchboard_baseline.yaml`'s checked-in default
+(`use_day_layers: true`) is deliberately left unchanged this round; this
+comparison used dedicated `scratch/` configs.
+
+---
+
+### Task 4: Model A retrained without day layers on the official split (2026-09-09)
+
+**Question:** Given Task 3's result, does retraining Model A
+(`splits/official.json`, all 45 sessions) with day layers removed close
+the gap toward the published baseline's `val_PER=0.101`, and away from
+the original divergent attempt's `best_val_per=0.5009`?
+
+**Method:** Retrained on `splits/official.json` with Task 3's winning
+configuration (`use_day_layers: false`, no patching, no day-layer
+penalty), 100 epochs, early stopping disabled, otherwise identical
+hyperparameters to the original attempt.
+
+**Result:** Best val PER **0.2963 at epoch 47**, final (epoch 99)
+**0.4045**. Train loss and `grad_norm_mean` both degrade substantially
+after epoch 47 (train loss 0.628 -> 1.044; `grad_norm_mean` climbs from
+single digits to spiking as high as 439.8 at epoch 91) -- real, but far
+milder than the original with-day-layers divergence (`grad_norm_mean`
+previously reached 283-1176). `checkpoint_best.pt` correctly recovers
+the good epoch, so 0.2963 is the number that stands, but training on the
+full 45-session official split is evidently noisier for this
+configuration than s15 was (where run E was stable through epoch 99) --
+plausibly because s15 only exercises ~14 of 45 sessions.
+
+**Consequence:** **0.2963 lands in the 0.20-0.30 band: pipeline correct,
+architecture meaningfully weaker than published.** Roughly halves the
+gap to published (0.101) relative to the original divergent attempt
+(0.5009) and eliminates the catastrophic divergence, but does not reach
+the 0.10-0.15 "architecture nearly matches" band. Largest remaining
+candidates, not implemented this round: (1) this project's GRU is
+unidirectional by explicit design choice (`docs/DESIGN.md` section 10,
+`[principled]`) while published baselines in this space are typically
+bidirectional; (2) patching (`patch_size=14, patch_stride=4`, already
+implemented and tested this round) has never been tried *combined with*
+day layers off -- an essentially free experiment, since both pieces
+already exist independently and pass their own tests, that Task 3's
+A-E matrix did not include.

@@ -192,6 +192,92 @@ def test_active_session_none_round_trips_too() -> None:
 # --- Task 2(d): gradient hook survives .to(device) --------------------------
 
 
+# --- identity_penalty / weight_deviation_stats ------------------------------
+
+
+@pytest.mark.parametrize("parameterization", PARAMETERIZATIONS)
+def test_identity_penalty_zero_at_init(parameterization) -> None:
+    day_layers = DayLayers(n_sessions=5, n_features=8, parameterization=parameterization, rank=3)
+    penalty = day_layers.identity_penalty()
+    assert penalty.item() == pytest.approx(0.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("parameterization", PARAMETERIZATIONS)
+def test_weight_deviation_stats_zero_at_init(parameterization) -> None:
+    day_layers = DayLayers(n_sessions=5, n_features=8, parameterization=parameterization, rank=3)
+    mean_dev, max_dev = day_layers.weight_deviation_stats()
+    assert mean_dev == pytest.approx(0.0, abs=1e-6)
+    assert max_dev == pytest.approx(0.0, abs=1e-6)
+
+
+def test_identity_penalty_matches_hand_computation_full() -> None:
+    day_layers = DayLayers(n_sessions=2, n_features=4, parameterization="full")
+    with torch.no_grad():
+        # Session 0: every weight entry off by 1.0 from identity (16 entries).
+        day_layers.weights[0] = torch.eye(4) + 1.0
+        day_layers.biases[0] = torch.full((4,), 2.0)
+        # Session 1 stays at identity/zero.
+    penalty = day_layers.identity_penalty().item()
+
+    # weight term: mean_s(||W[s]-I||_F^2 / 16) = mean(16*1^2/16, 0) = mean(1, 0) = 0.5
+    # bias term:   mean_s(||b[s]||^2 / 4)      = mean(4*2^2/4, 0)  = mean(4, 0) = 2.0
+    assert penalty == pytest.approx(0.5 + 2.0)
+
+
+def test_identity_penalty_matches_hand_computation_diagonal() -> None:
+    day_layers = DayLayers(n_sessions=2, n_features=4, parameterization="diagonal")
+    with torch.no_grad():
+        day_layers.scale[0] = torch.full((4,), 2.0)  # deviation 1.0 per entry
+        day_layers.biases[0] = torch.full((4,), 2.0)
+    penalty = day_layers.identity_penalty().item()
+
+    # weight term: mean_s(||scale[s]-1||^2 / 4) = mean(4*1^2/4, 0) = mean(1, 0) = 0.5
+    # bias term:   same as the "full" case above = 2.0
+    assert penalty == pytest.approx(0.5 + 2.0)
+
+
+def test_identity_penalty_matches_hand_computation_lowrank() -> None:
+    day_layers = DayLayers(n_sessions=2, n_features=4, parameterization="lowrank", rank=2)
+    with torch.no_grad():
+        # U @ V for session 0: force a known product by setting U=I-like
+        # selector and V to a known matrix.
+        day_layers.U[0] = torch.tensor([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
+        day_layers.V[0] = torch.tensor([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ])
+        # U[0] @ V[0] = [[1,0,0,0],[0,1,0,0],[0,0,0,0],[0,0,0,0]] -- Frobenius^2 = 2.0
+        day_layers.biases[0] = torch.zeros(4)
+        day_layers.U[1] = torch.zeros(4, 2)  # session 1 stays at U=0 -> deviation 0
+    penalty = day_layers.identity_penalty().item()
+
+    # weight term: mean_s(||U@V||_F^2 / 16) = mean(2.0/16, 0) = 0.0625
+    assert penalty == pytest.approx(0.0625)
+
+
+def test_weight_deviation_stats_matches_hand_computation() -> None:
+    day_layers = DayLayers(n_sessions=3, n_features=4, parameterization="full")
+    with torch.no_grad():
+        day_layers.weights[0] = torch.eye(4)  # deviation 0 everywhere
+        day_layers.weights[1][0, 0] = 1.0 + 3.0  # one entry off by 3.0
+        day_layers.weights[2][1, 2] = 1.0 - 0.5  # one entry off by 0.5
+
+    mean_dev, max_dev = day_layers.weight_deviation_stats()
+    # per-session max: [0.0, 3.0, 0.5] -> mean=1.1667, max=3.0
+    assert mean_dev == pytest.approx((0.0 + 3.0 + 0.5) / 3)
+    assert max_dev == pytest.approx(3.0)
+
+
+def test_identity_penalty_is_differentiable() -> None:
+    day_layers = DayLayers(n_sessions=2, n_features=4, parameterization="full")
+    with torch.no_grad():
+        day_layers.weights[0] += 0.1
+    penalty = day_layers.identity_penalty()
+    penalty.backward()
+    assert day_layers.weights.grad is not None
+    assert day_layers.weights.grad.abs().sum() > 0
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_gradient_hook_survives_to_device() -> None:
     day_layers = DayLayers(n_sessions=3, n_features=4).to("cuda")

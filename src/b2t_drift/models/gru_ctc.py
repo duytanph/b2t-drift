@@ -53,21 +53,23 @@ for the exact reproduced value). Recorded with both numbers in
 `docs/DESIGN.md`'s "Model hyperparameters" section.
 
 THE CTC LENGTH CONTRACT (see also `data/collate.py`'s module docstring,
-which this model's caller must also have read). This version applies NO
-temporal downsampling anywhere in the forward pass -- the GRU consumes and
-emits one output per input timestep, 1:1. `input_lengths` therefore pass
-through `ctc_input_lengths` UNCHANGED. This is a deliberate, explicit
-scope decision, not an oversight: the published baseline concatenates 14
-consecutive 20 ms bins at stride 4 before its GRU (a 7,168-dim input at an
-effective 80 ms output stride), which WOULD require dividing
-`input_lengths` by 4 before `nn.CTCLoss` (`CLAUDE.md`'s "known pitfalls" --
-getting this wrong is the single most likely place for a silent bug in
-this whole pipeline, since a wrong length doesn't raise, it just corrupts
-the loss). That comparison is future work, not inherited here by default.
-`ctc_input_lengths` exists specifically so that when downsampling IS added
-later, there is exactly one place in this file that has to change, and
-every call site that already routes lengths through it picks up the fix
-automatically instead of needing to be found and edited individually.
+which this model's caller must also have read). `patch_size`/`patch_stride`
+(default `1`/`1`, a no-op) control whether the GRU consumes one output per
+INPUT timestep (the original, no-downsampling behavior) or one output per
+PATCH of `patch_size` consecutive timesteps stepped every `patch_stride`
+-- `patch_size=14, patch_stride=4` matches the published baseline (a
+7,168-dim input, `14*512`, at an effective 80 ms output stride). Whenever
+`patch_size > 1` or `patch_stride > 1`, `input_lengths` MUST be divided
+down to the patched time axis before `nn.CTCLoss` ever sees them
+(`CLAUDE.md`'s "known pitfalls" -- getting this wrong is the single most
+likely place for a silent bug in this whole pipeline, since a wrong length
+doesn't raise, it just corrupts the loss: the model trains, converges, and
+emits garbage). `ctc_input_lengths` is the ONE place this conversion
+happens -- `forward` itself calls it (for `pack_padded_sequence` after
+patching, see `_patch`'s note on `patched_lengths`), and every external
+caller (`training/loop.py`) routes `input_lengths` through it before
+`nn.CTCLoss`, so there is exactly one formula to get right, used
+identically on both sides.
 
 NOTE: `ctc_input_lengths` (the CTC-loss length adjustment) and `forward`'s
 optional `input_lengths` argument (padding masking around the GRU) are
@@ -106,8 +108,12 @@ support is a smaller lift now than before, but is a deliberate future
 change, not implied by this fix.
 
 DEVIATIONS FROM THE PUBLISHED BASELINE, gathered in one place:
-  - Plain 512-dim input at 20 ms bins, no 14-bin/stride-4 concatenation
-    (see the CTC length contract note above).
+  - Plain 512-dim input at 20 ms bins by DEFAULT (`patch_size=1,
+    patch_stride=1`); 14-bin/stride-4 patching (see the CTC length
+    contract note above) is now implemented and available via
+    `patch_size=14, patch_stride=4`, but is opt-in, not the default --
+    an explicit later comparison (`docs/DESIGN.md` section 7's Task 3),
+    not inherited automatically.
   - `n_layers=3` vs. the baseline's 5 (smaller training set here).
   - `hidden_size=512` vs. the baseline's 768 (same reason).
   - Unidirectional (causal) by default; the baseline (an offline research
@@ -181,6 +187,8 @@ class GRUCTC(nn.Module):
         use_day_layers: bool = True,
         input_dropout: float = 0.0,
         smoothing_sigma_bins: float = DEFAULT_SMOOTHING_SIGMA_BINS,
+        patch_size: int = 1,
+        patch_stride: int = 1,
     ) -> None:
         """Build the GRU/CTC decoder.
 
@@ -281,10 +289,34 @@ class GRUCTC(nn.Module):
                 the literature and derivable from the timescale of
                 speech. Set to 0 to disable smoothing entirely (identity
                 -- see `_smooth`). `[principled]`
+            patch_size: 1 (no-op -- plain per-timestep input, matching
+                every default above). 14 matches the published baseline:
+                concatenate 14 consecutive 20 ms bins into one GRU input
+                vector (`14 * 512 = 7,168`-dim). See `_patch` for the
+                exact concatenation order and `ctc_input_lengths` for the
+                matching length-conversion formula -- the two MUST use
+                the same `patch_size`/`patch_stride` (both read from
+                `self`, so they always do) or the CTC loss silently sees
+                the wrong length (`CLAUDE.md`'s "known pitfalls"; the
+                module docstring's "THE CTC LENGTH CONTRACT"). An
+                explicit later comparison (`docs/DESIGN.md` section 7's
+                Task 3), not inherited as a default. `[principled]` when
+                set to 14 (matches the published pipeline's real-time
+                80 ms output-stride design); the default of 1 is a
+                `[judgment call]` scope decision (start with no patching,
+                add it as a controlled comparison), not derived.
+            patch_stride: 1 (no-op, paired with `patch_size=1`). 4
+                matches the published baseline (stepped every 4 of the
+                20 ms bins that `patch_size` groups together, i.e. every
+                80 ms). See `patch_size`'s entry -- same tags, same
+                reasoning.
 
         Raises:
             ValueError: If `bidirectional=True` (not yet supported --
-                see `bidirectional`'s entry above).
+                see `bidirectional`'s entry above); or if `patch_size < 1`
+                or `patch_stride < 1` (both must be positive -- `1` is
+                the no-op floor, not `0`, since a patch of size 0 or a
+                stride of 0 has no sensible meaning).
         """
         super().__init__()
 
@@ -302,6 +334,12 @@ class GRUCTC(nn.Module):
                 "limitation, and is a smaller lift to re-enable than it "
                 "used to be."
             )
+        if patch_size < 1 or patch_stride < 1:
+            raise ValueError(
+                f"GRUCTC.__init__: patch_size={patch_size} and patch_stride={patch_stride} "
+                f"must both be >= 1 (1 is the no-op floor -- a patch of size 0 or a stride "
+                f"of 0 has no sensible meaning)."
+            )
 
         self.n_sessions = n_sessions
         self.n_features = n_features
@@ -312,6 +350,8 @@ class GRUCTC(nn.Module):
         self.use_day_layers = use_day_layers
         self.input_dropout = input_dropout
         self.smoothing_sigma_bins = smoothing_sigma_bins
+        self.patch_size = patch_size
+        self.patch_stride = patch_stride
 
         self._input_dropout = nn.Dropout1d(input_dropout) if input_dropout > 0 else None
 
@@ -369,7 +409,11 @@ class GRUCTC(nn.Module):
             self.register_buffer("_smoothing_kernel", None)
 
         self.gru = nn.GRU(
-            input_size=n_features,
+            # patch_size=1 (the default) makes this exactly n_features,
+            # matching the pre-patching model's GRU exactly -- see
+            # `_patch`'s docstring for the concatenation order this
+            # dimension assumes.
+            input_size=n_features * patch_size,
             hidden_size=hidden_size,
             num_layers=n_layers,
             batch_first=True,
@@ -437,21 +481,80 @@ class GRUCTC(nn.Module):
         )
         return smoothed.transpose(1, 2)  # (batch, time, n_features)
 
-    def ctc_input_lengths(self, input_lengths: torch.Tensor) -> torch.Tensor:
-        """Map raw per-trial `input_lengths` to CTC-ready lengths.
+    def _patch(self, x: torch.Tensor) -> torch.Tensor:
+        """Concatenate `patch_size` consecutive timesteps, stepped every
+        `patch_stride`, or return `x` unchanged if `patch_size==1 and
+        patch_stride==1` (the default -- no-op).
 
-        Currently the IDENTITY function: this version of `GRUCTC` applies
-        no temporal downsampling anywhere (see the module docstring's CTC
-        length contract), so `nn.CTCLoss`'s `input_lengths` argument is
+        MUST run AFTER `_smooth`, never before: `smoothing_sigma_bins`
+        means "2 bins = 40 ms" at the ORIGINAL 20 ms-per-bin resolution
+        (the module docstring's hyperparameter table). Smoothing across
+        PATCHED (80 ms-stride) positions instead would smooth over a
+        completely different, much coarser timescale -- see `forward`'s
+        call order for where this is enforced.
+
+        CONCATENATION ORDER. `x.unfold(1, patch_size, patch_stride)`
+        gives `(batch, n_patches, n_features, patch_size)` -- PyTorch's
+        `unfold` always appends the windowed dimension LAST. Flattening
+        that directly would interleave as "all `patch_size` values of
+        feature 0, then all `patch_size` values of feature 1, ..."
+        (feature-major), which is NOT what "concatenate 14 consecutive
+        20 ms bins" (the published baseline's own description) means --
+        that means BIN-major: bin 0's full 512-dim feature vector, then
+        bin 1's, ..., then bin 13's, concatenated into one 7,168-dim
+        vector. This method `.permute`s to `(batch, n_patches,
+        patch_size, n_features)` BEFORE flattening, specifically to get
+        that bin-major order.
+
+        Args:
+            x: `(batch, time, n_features)` float32, already smoothed and
+                padding-masked.
+
+        Returns:
+            `x` unchanged if `patch_size==1 and patch_stride==1`.
+            Otherwise `(batch, n_patches, patch_size * n_features)`
+            float32, where `n_patches = (time - patch_size) //
+            patch_stride + 1` -- EXACTLY the formula `ctc_input_lengths`
+            applies to lengths (both must agree, and PyTorch's `unfold`
+            is documented to produce exactly this many windows, so the
+            two are guaranteed consistent rather than independently
+            re-derived).
+        """
+        if self.patch_size == 1 and self.patch_stride == 1:
+            return x
+        patches = x.unfold(1, self.patch_size, self.patch_stride)  # (batch, n_patches, n_features, patch_size)
+        patches = patches.permute(0, 1, 3, 2).contiguous()  # (batch, n_patches, patch_size, n_features)
+        batch, n_patches = patches.shape[0], patches.shape[1]
+        return patches.reshape(batch, n_patches, self.patch_size * self.n_features)
+
+    def ctc_input_lengths(self, input_lengths: torch.Tensor) -> torch.Tensor:
+        """Map raw per-trial `input_lengths` to CTC-ready (post-patching)
+        lengths.
+
+        The IDENTITY function when `patch_size==1 and patch_stride==1`
+        (the default): this configuration applies no temporal
+        downsampling anywhere (see the module docstring's CTC length
+        contract), so `nn.CTCLoss`'s `input_lengths` argument is
         exactly the same as `collate_trials`'s `input_lengths`.
 
-        THIS IS THE SINGLE PLACE THAT MUST CHANGE if temporal downsampling
-        (striding, pooling, patching the time axis) is ever added to this
-        model. Callers should ALWAYS route `input_lengths` through this
-        method before passing them to `nn.CTCLoss`, even though today it
-        does nothing -- that discipline is what prevents the length
-        adjustment from being silently forgotten at whichever call site
-        adds the downsampling later (`CLAUDE.md`'s "known pitfalls").
+        WHEN `patch_size > 1` OR `patch_stride > 1`: applies the SAME
+        formula `_patch`'s `unfold` call uses internally to determine
+        `n_patches` (PyTorch's own documented `unfold` behavior), via
+        integer floor division (`rounding_mode="floor"`, never float
+        division -- avoids any floating-point rounding disagreement with
+        `unfold`'s own integer arithmetic, which matters exactly at
+        multiples where float division could round the wrong way):
+
+            ctc_len = (input_len - patch_size) // patch_stride + 1
+
+        Callers should ALWAYS route `input_lengths` through this method
+        before passing them to `nn.CTCLoss` -- this discipline is what
+        prevents the length adjustment from being silently forgotten at
+        whichever call site changes `patch_size`/`patch_stride` later
+        (`CLAUDE.md`'s "known pitfalls"), and is also what `forward`
+        itself does internally (see its `patched_lengths` note) so the
+        GRU's `pack_padded_sequence` and `nn.CTCLoss` always agree on
+        exactly the same per-item length.
 
         NOTE: unrelated to `forward`'s own `input_lengths` argument (which
         controls `pack_padded_sequence`/`pad_packed_sequence` around the
@@ -462,11 +565,13 @@ class GRUCTC(nn.Module):
             input_lengths: `(batch,)` int64, from `collate_trials`.
 
         Returns:
-            `(batch,)` int64. Currently `input_lengths` unchanged
-            (the same tensor object, not a copy -- there is nothing to
-            compute yet).
+            `(batch,)` int64. `input_lengths` unchanged (the same tensor
+            object, not a copy) when `patch_size==1 and patch_stride==1`;
+            otherwise a new tensor per the formula above.
         """
-        return input_lengths
+        if self.patch_size == 1 and self.patch_stride == 1:
+            return input_lengths
+        return torch.div(input_lengths - self.patch_size, self.patch_stride, rounding_mode="floor") + 1
 
     def forward(
         self,
@@ -502,13 +607,16 @@ class GRUCTC(nn.Module):
                      constant into the last few real timesteps,
                      differently depending on how much padding happened
                      to be in the batch.
-                  2. The GRU is then run through
-                     `nn.utils.rnn.pack_padded_sequence` /
-                     `pad_packed_sequence` (with `enforce_sorted=False`,
+                  2. After smoothing and (if `patch_size`/`patch_stride`
+                     are not both 1) patching, `input_lengths` is routed
+                     through `ctc_input_lengths` to get PATCHED per-item
+                     lengths, and the GRU is run through
+                     `nn.utils.rnn.pack_padded_sequence` / `pad_packed_
+                     sequence` using THOSE (with `enforce_sorted=False`,
                      so callers need not pre-sort the batch by length,
-                     and `total_length=features.size(1)` so the unpacked
-                     output's time dimension still matches the input's
-                     `max_time`) so padded timesteps never enter the
+                     and `total_length` set to the post-patching time
+                     dimension so the unpacked output's time axis still
+                     matches) so padded timesteps/patches never enter the
                      recurrence -- both for correctness (bidirectional,
                      if ever re-enabled) and performance (cuDNN's
                      packed-sequence path skips computation on padding
@@ -576,8 +684,22 @@ class GRUCTC(nn.Module):
 
         x = self._smooth(x)
 
+        # Order matters: patching AFTER smoothing (see _patch's docstring
+        # for why smoothing at 40 ms means something different once the
+        # time axis has already been strided to 80 ms). No-op when
+        # patch_size==1 and patch_stride==1.
+        x = self._patch(x)
+
+        # patched_lengths, not raw input_lengths: after patching, the GRU
+        # must be told each item's length in PATCHES, not original
+        # timesteps -- the same formula ctc_input_lengths applies for
+        # nn.CTCLoss (see the module docstring's CTC length contract),
+        # computed here via the SAME method so packing and the loss can
+        # never silently disagree about how long an item is.
+        patched_lengths = self.ctc_input_lengths(input_lengths)
+
         packed = nn.utils.rnn.pack_padded_sequence(
-            x, input_lengths.cpu(), batch_first=True, enforce_sorted=False,
+            x, patched_lengths.cpu(), batch_first=True, enforce_sorted=False,
         )
         packed_out, _ = self.gru(packed)
         gru_out, _ = nn.utils.rnn.pad_packed_sequence(

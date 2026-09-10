@@ -122,6 +122,56 @@ of the release. Removed rather than kept as a strawman.
 | **2 — new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | Structurally identical to the `day_weights`/`day_biases` layers found in the official checkpoint (`docs/FINDINGS.md`). More degrees of freedom than Arm 1; can partially compensate for a shifted phoneme-to-channel mapping. |
 | **3 — fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | Highest participant-time and compute cost. **Catastrophic-forgetting risk at small N**: too little new-day data and whole-network fine-tuning can overfit to the N calibration sentences, losing generalization the frozen-backbone arms would have kept. |
 
+**The day-layer gap (0.313) exceeds 18 months of observed drift (0.205)
+— recalibration is the DOMINANT effect here, not a secondary one.**
+Measured directly (`docs/FINDINGS.md`: "The identity-day-layer redirect
+control"): redirecting a training session's day-layer index to an
+untrained (identity) slice costs +0.313 PER on average, while the
+entire observed drift from +5d to +546d is +0.205 PER
+(`docs/FINDINGS.md`: "The full 22-session drift curve"). A single day's
+Arm 2 recalibration therefore has more headroom to recover than 18
+months of drift has room to lose — this reframes Question 3 from "how
+much does drift cost, and can recalibration offset some of it" to
+"recalibration recovers more than drift ever takes away, so the DECISION
+question is really about cost-efficiency (how little labeled data
+achieves that recovery), not whether recalibration helps at all."
+
+**Arm 2's `"full"` parameterization is likely unworkable at small N.**
+Model A trained all 45 `"full"` day-layer slices (`docs/DATASET.md`;
+11.8M of 16.6M total parameters at this scale) simultaneously, each
+against hundreds of training trials, with `weight_decay=0.0` (no
+anchor toward identity) — and diverged (`docs/FINDINGS.md`: "Model A's
+initial result and divergence"; this round's Task 1/3/4 diagnose the
+mechanism and test the identity-anchored-penalty fix). If 45 slices with
+hundreds of trials each still destabilize training, a SINGLE new-day
+`"full"` slice fit from Arm 2's target of 10-50 labeled sentences (far
+less data per slice) is not a smaller version of a working setup — it is
+an even more underdetermined version of a setup that already failed at
+much greater data-per-slice. `"diagonal"` and `"lowrank"`
+(`models/day_layers.py`'s module docstring: 1,024 and 16,896
+params/session respectively, vs. `"full"`'s 262,656) are probably the
+only viable parameterizations for Arm 2 as actually deployed; `"full"`
+remains useful as an UPPER-BOUND comparison (how much PER recovery is
+theoretically available with unlimited per-session capacity), not as
+the parameterization Arm 2 would ship.
+
+**Task 3's comparison deepens this from "which parameterization" to
+"whether day layers should be used at all."** A five-way comparison on
+`temporal_s01_s15_switchboard` (baseline; + identity-anchored penalty;
++ patching; + both; day layers removed entirely) found the no-day-layer
+control beats every day-layer variant on both best val PER (0.2001 vs.
+the best day-layer variant's 0.2641) and training stability
+(`docs/FINDINGS.md`: "Task 3 architecture comparison"). This is recorded
+as an open question, not resolved here: it directly undercuts Arm 2's
+premise (there is no day-layer mechanism to recalibrate if the shipped
+architecture doesn't use one), but the comparison above was run on s15
+only (3,150 trials, ~14 of 45 sessions active) — whether the same
+result holds at the official split's full scale, and what it implies
+for Arm 2's continued relevance, is a decision for the next round, not
+one made unilaterally by this comparison alone. The checked-in default
+(`configs/experiment/switchboard_baseline.yaml`: `use_day_layers: true`)
+is deliberately left unchanged pending that decision.
+
 ---
 
 ## 6. What a rising PER curve means
@@ -209,6 +259,23 @@ sessions). This is why the sweep stops at 1–20.
   to the test data by the back door. Examined once, at the end, per
   cut-point model. Session 16 is a valid validation source for the 1–15
   cut but must never be used for the 1–5 cut's evaluation of session 16.
+
+**s15's 126-day coverage gap (days +7 to +133) sits exactly across the
+region where effective signal collapses — a consequence of the sweep
+design, not a flaw to engineer around.** The gap itself
+(`docs/FINDINGS.md`: "Cut-point sweep manifests built and validated; a
+126-day coverage gap") means s15 has no eval point between +7d and
++133d — exactly the window where `effective_signal` falls from ~0.15
+(day +5/+7) toward the ~0.02–0.03 range it holds from +133 onward
+(`docs/FINDINGS.md`: "The effective-signal control"). s15 alone can
+therefore only establish that the collapse has ALREADY mostly happened
+by +133d, not resolve where within that gap it actually occurs. **s05**
+(27 passing sessions, day-offset range starting at +2 — `docs/FINDINGS.md`'s
+cut-point table) is the cut point better positioned to characterize the
+collapse itself, once trained, since its early eval points sit inside
+the exact window s15 skips. This is precisely why the sweep runs at
+multiple cut points (this section's opening rationale) rather than
+committing to s15 alone.
 
 **Corpus stratification.** Switchboard-only, both train and eval, is the
 **primary analysis** (`splits/temporal_s01_s*_switchboard.json`);
@@ -315,6 +382,28 @@ beyond what it can actually support. **Visualization caveat only, not a
 PER change:** silence is ~25% of tokens and will dominate any confusion
 matrix at a shared scale — plot it separately or normalize per row.
 
+**`effective_signal` is a reported metric alongside PER, not a
+replacement for it.** `effective_signal = PER_shuffled − PER_real`,
+where `PER_shuffled` replaces each trial's `input_features` with a
+length-compatible donor trial's from the SAME session (targets
+unchanged) — `scripts/03_evaluate.py --shuffled-control`,
+`b2t_drift.evaluation.shuffled_control`. **Why raw PER cannot do this
+job alone:** a degenerate, non-functional decoder does not score 1.0 on
+this task — the empty-hypothesis ceiling is exactly 1.000 (confirmed),
+but a constant-silence hypothesis already scores 0.962–0.966
+(`docs/FINDINGS.md`: "The effective-signal control"), and greedy CTC
+decoding on genuinely uninformative input tends to land near there too
+— so a real PER of ~0.85–0.90 is consistent with EITHER "still degrading
+gracefully" or "already extracting nothing," and raw PER alone cannot
+tell the two apart. `effective_signal` can: it is the PER gap between
+the model's real decode and its decode of scrambled input for the SAME
+session, i.e. how much the model gains from receiving genuine neural
+data. It falls to near-zero (`docs/FINDINGS.md`'s measured slope:
+−0.0140 per 100 days, reaching statistical zero by +453d) exactly where
+the decoder has stopped using neural information, regardless of what raw
+PER happens to read there. Report it alongside every drift-curve PER
+value from a cut point onward, not only at the two endpoints.
+
 ---
 
 ## 10. Model hyperparameters
@@ -336,8 +425,10 @@ literature), `judgment call` (reasonable given constraints, not derived),
 | `n_classes` | 41 | — | CTC blank (0) + 39 ARPABET phonemes (1–39) + silence (40); verified against `seq_class_ids`. | fixed by data |
 | `input_dropout` | 0.0 | — | Off by default; channel dropout simulating electrode failure is a later ablation, not a training default — enabling it now would confound the baseline. | judgment call |
 | `n_features` | 512 | — | 256 threshold-crossing + 256 spike-band-power channels at 20 ms bins; not tunable. | fixed by data |
-| Input patching | none (plain 512-dim) | 14-bin/stride-4 patching (7,168-dim GRU input, 80 ms output stride) | Not an inherited default — an explicit later comparison. No downsampling here means `input_lengths` pass through `ctc_input_lengths` unchanged; adding stride later requires dividing lengths first, before `nn.CTCLoss` (`CLAUDE.md`'s "known pitfalls"). | principled |
-| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). | principled |
+| `patch_size` | 1 (no-op default) | 14 (7,168-dim GRU input) | `1` disables patching; `14` matches the published pipeline's bin concatenation. Implemented and tested (`tests/test_patching.py`) this round — `unfold`-based, applied after smoothing, before the GRU. `ctc_input_lengths` divides accordingly before `nn.CTCLoss` (`CLAUDE.md`'s "known pitfalls"); verified against every s15 train+val trial. On s15, `patch_size=14` alone (Task 3 run C) improved over the unpatched baseline but did not beat removing day layers (`docs/FINDINGS.md`: "Task 3 architecture comparison") — untested combined with `use_day_layers: false`, the cheapest open experiment. | judgment call — 1 is the current default; 14 tested but not adopted |
+| `patch_stride` | 1 (no-op default) | 4 | Paired with `patch_size`; see above. | judgment call — same status as `patch_size` |
+| `day_layer_penalty` | 0.0 (off by default) | n/a (published checkpoint's day layers are unregularized toward identity, per the checkpoint inspection) | Identity-anchored regularization (`DayLayers.identity_penalty()`) for `use_day_layers=True`, needed because ordinary weight decay pulls toward zero — the wrong no-op point for a per-session correction whose no-op is the identity matrix (`docs/FINDINGS.md`: "Model A's initial result and divergence"). `lambda=300` measured (not guessed) to contribute ~0.11%/3.26%/7.53% of total loss at epochs 1/5/10 on real s15 data (`docs/FINDINGS.md`: "Choosing the identity-anchored day-layer penalty's lambda") — used for the Task 3 comparison, not the checked-in baseline default. | judgment call — lambda measured against one run; helps stability but did not beat removing day layers entirely on s15 |
+| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). **Caveat (2026-09-09):** Task 3's five-way s15 comparison found `use_day_layers: false` beats every day-layer variant tried, including the identity-anchored-penalty and patching combinations (`docs/FINDINGS.md`: "Task 3 architecture comparison"; section 5 above records the Arm 2 consequence). Kept at `principled`/`True` here — this comparison alone does not settle whether to change the project default, only that it's an open question requiring a considered decision, not a routine config change. | principled (caveat above) |
 
 **Memory cost of `DayLayers`.** Dense `(n_sessions, n_features,
 n_features)` float32 — 45×512×512×4 bytes ≈ 47 MB, a large fraction of

@@ -238,6 +238,8 @@ def main() -> None:
         use_day_layers=model_config["use_day_layers"],
         input_dropout=model_config["input_dropout"],
         smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
+        patch_size=model_config.get("patch_size", 1),
+        patch_stride=model_config.get("patch_stride", 1),
     ).to(device)
 
     optimizer = torch.optim.Adam(
@@ -290,6 +292,7 @@ def main() -> None:
         max_epochs=max_epochs, patience=patience, run_dir=run_dir,
         scaler=scaler, grad_clip=training_config["grad_clip"],
         train_sampler=train_sampler, loggers=loggers, config=resolved_config,
+        day_layer_penalty=training_config.get("day_layer_penalty", 0.0),
     )
 
     print(f"[02_train] done: {summary}")
@@ -308,6 +311,8 @@ def main() -> None:
             bidirectional=model_config["bidirectional"], use_day_layers=model_config["use_day_layers"],
             input_dropout=model_config["input_dropout"],
             smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
+            patch_size=model_config.get("patch_size", 1),
+            patch_stride=model_config.get("patch_stride", 1),
         )
         load_checkpoint(run_dir / "checkpoint_best.pt", sanity_model)
         print(f"[02_train] checkpoint_best.pt reloads cleanly (epoch {summary['best_epoch']}).")

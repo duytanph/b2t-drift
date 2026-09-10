@@ -151,6 +151,112 @@ def test_train_one_epoch_amp_on_cuda_runs_and_produces_finite_loss() -> None:
     assert math.isfinite(result["loss"])
 
 
+# --- train_one_epoch: day_layer_penalty -------------------------------------
+
+
+def test_day_layer_penalty_zero_leaves_loss_unaffected() -> None:
+    """day_layer_penalty=0.0 (the default) must be byte-for-byte the same
+    training objective as before this feature existed -- verified by
+    comparing loss trajectories against day_layer_penalty simply absent."""
+    _require_real_data()
+    dataloader, _ = _build_dataloader(n_trials=2, batch_size=2)
+    criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
+
+    torch.manual_seed(0)
+    model_a = _tiny_model()
+    optimizer_a = torch.optim.Adam(model_a.parameters(), lr=1e-3)
+    result_a = train_one_epoch(model_a, dataloader, optimizer_a, criterion, torch.device("cpu"))
+
+    torch.manual_seed(0)
+    model_b = _tiny_model()
+    optimizer_b = torch.optim.Adam(model_b.parameters(), lr=1e-3)
+    result_b = train_one_epoch(
+        model_b, dataloader, optimizer_b, criterion, torch.device("cpu"), day_layer_penalty=0.0,
+    )
+
+    assert result_a["loss"] == pytest.approx(result_b["loss"])
+
+
+def test_day_layer_penalty_positive_changes_loss_and_pulls_toward_identity() -> None:
+    """A nonzero day_layer_penalty must (a) change the reported train loss
+    relative to an identical run without it, since the penalty is added
+    BEFORE backward, and (b) actually reduce max|W-I| after a training
+    step that would otherwise have moved weights away from identity --
+    the whole point of the regularizer.
+
+    Both models start PRE-PERTURBED away from identity (not fresh) --
+    a freshly-initialized DayLayers sits exactly AT identity, so
+    identity_penalty() is exactly 0.0 at step 0 regardless of lambda,
+    which would make this comparison vacuous. A SINGLE step is not
+    enough to see the pull either: the perturbation here is uniform
+    across all 512*512 entries, and one Adam step barely dents it
+    relative to that scale (verified directly -- both conditions land
+    at the same max|W-I| to 6 decimal places after just one step), so
+    this trains for several epochs on the same tiny 2-trial batch to
+    let the effect accumulate to something unambiguous.
+    """
+    _require_real_data()
+    dataloader, _ = _build_dataloader(n_trials=2, batch_size=2)
+    criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
+    n_epochs = 20
+
+    def _perturbed_model() -> GRUCTC:
+        torch.manual_seed(0)
+        model = _tiny_model()
+        with torch.no_grad():
+            model.day_layers.weights[0] += 0.05
+        return model
+
+    model_plain = _perturbed_model()
+    optimizer_plain = torch.optim.Adam(model_plain.parameters(), lr=1e-2)
+    first_loss_plain = None
+    for epoch in range(n_epochs):
+        result = train_one_epoch(
+            model_plain, dataloader, optimizer_plain, criterion, torch.device("cpu"), epoch=epoch,
+        )
+        first_loss_plain = first_loss_plain if first_loss_plain is not None else result["loss"]
+
+    model_penalized = _perturbed_model()
+    optimizer_penalized = torch.optim.Adam(model_penalized.parameters(), lr=1e-2)
+    first_loss_penalized = None
+    for epoch in range(n_epochs):
+        result = train_one_epoch(
+            model_penalized, dataloader, optimizer_penalized, criterion, torch.device("cpu"),
+            epoch=epoch, day_layer_penalty=50.0,
+        )
+        first_loss_penalized = first_loss_penalized if first_loss_penalized is not None else result["loss"]
+
+    assert first_loss_plain != pytest.approx(first_loss_penalized)
+    assert first_loss_penalized > first_loss_plain, (
+        "the penalty term is strictly additive and positive (a squared "
+        "deviation), so the penalized run's first-epoch loss must be higher"
+    )
+
+    _, plain_max_dev = model_plain.day_layers.weight_deviation_stats()
+    _, penalized_max_dev = model_penalized.day_layers.weight_deviation_stats()
+    assert penalized_max_dev < plain_max_dev, (
+        f"day_layer_penalty=50.0 over {n_epochs} epochs should pull weights "
+        f"closer to identity than no penalty: penalized max|W-I|="
+        f"{penalized_max_dev:.6f} was not < plain max|W-I|={plain_max_dev:.6f}"
+    )
+
+
+def test_day_layer_penalty_noop_when_day_layers_disabled() -> None:
+    """day_layer_penalty > 0 with use_day_layers=False must not raise --
+    there is nothing to regularize, so it's silently a no-op, matching
+    the docstring's stated contract."""
+    _require_real_data()
+    dataloader, _ = _build_dataloader(n_trials=2, batch_size=2)
+    model = GRUCTC(n_sessions=1, hidden_size=16, n_layers=1, dropout=0.0, use_day_layers=False)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
+
+    result = train_one_epoch(
+        model, dataloader, optimizer, criterion, torch.device("cpu"), day_layer_penalty=10.0,
+    )
+    assert math.isfinite(result["loss"])
+
+
 # --- evaluate ------------------------------------------------------------
 
 
@@ -351,8 +457,13 @@ def test_fit_smoke_run_creates_checkpoints_and_metrics_csv(tmp_path) -> None:
         "epoch", "train_loss", "val_loss", "val_per", "grad_norm_mean",
         "lr", "seconds", "train_seconds", "eval_seconds", "n_inf_batches",
         "val_blank_fraction", "val_decoded_length_ratio", "val_n_distinct_decoded_tokens",
+        "day_penalty", "day_layer_mean_max_weight_dev", "day_layer_max_weight_dev",
     }
     assert set(rows[0].keys()) == expected_columns
+    # _tiny_model() has use_day_layers=True -- these must be real numbers,
+    # not empty, whether or not day_layer_penalty is actually applied.
+    assert rows[0]["day_penalty"] not in ("", None)
+    assert rows[0]["day_layer_mean_max_weight_dev"] not in ("", None)
 
     counts_path = tmp_path / "decoded_token_counts.jsonl"
     assert counts_path.exists()
@@ -361,6 +472,27 @@ def test_fit_smoke_run_creates_checkpoints_and_metrics_csv(tmp_path) -> None:
     assert len(jsonl_rows) == 3
     assert [r["epoch"] for r in jsonl_rows] == [0, 1, 2]
     assert all(isinstance(r["counts"], dict) for r in jsonl_rows)
+
+
+def test_fit_day_layer_columns_are_none_when_day_layers_disabled(tmp_path) -> None:
+    _require_real_data()
+    torch.manual_seed(0)
+    train_loader, sampler = _build_dataloader(n_trials=4, batch_size=2, bucketed=True)
+    val_loader, _ = _build_dataloader(n_trials=2, batch_size=2)
+    model = GRUCTC(n_sessions=1, hidden_size=16, n_layers=1, dropout=0.0, use_day_layers=False)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
+
+    fit(
+        model, train_loader, val_loader, optimizer, criterion, torch.device("cpu"),
+        max_epochs=1, patience=10, run_dir=tmp_path, train_sampler=sampler, config={"seed": 0},
+    )
+
+    with (tmp_path / "metrics.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["day_penalty"] == ""
+    assert rows[0]["day_layer_mean_max_weight_dev"] == ""
+    assert rows[0]["day_layer_max_weight_dev"] == ""
 
 
 def test_fit_stops_early_when_val_per_does_not_improve(tmp_path, monkeypatch) -> None:

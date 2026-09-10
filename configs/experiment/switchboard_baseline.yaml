@@ -19,6 +19,8 @@ model:
   use_day_layers: true        # docs/DESIGN.md section 10: [principled]
   input_dropout: 0.0          # docs/DESIGN.md section 10: [judgment call]
   smoothing_sigma_bins: 2.0   # docs/DESIGN.md section 10: [principled]
+  patch_size: 1                # 1 = no-op (baseline). 14 matches the published pipeline -- an
+  patch_stride: 1               # explicit Task 3 comparison, not this config's default.
 
 training:
   # Every value below is a reasonable starting point chosen by ordinary
@@ -45,6 +47,15 @@ training:
   batch_size: 32
   learning_rate: 0.001
   grad_clip: 1.0               # matches training/loop.py's train_one_epoch default
+  day_layer_penalty: 0.0       # 0.0 = no identity-anchoring penalty (baseline). Chosen value for
+                                # the Task 3 comparison is 300 -- see docs/FINDINGS.md ("Choosing
+                                # the identity-anchored day-layer penalty's lambda"): measured on a
+                                # real s15 run (penalty computed but not applied), lambda=300 gives
+                                # ~0.11% of total loss at epoch 1, ~3.26% at epoch 5, ~7.53% at
+                                # epoch 10 -- inside the targeted 1-10%-at-epoch-5 band, growing but
+                                # not dominating. This is measured from an UNANCHORED trajectory (an
+                                # upper bound on how far weights drift); a run that actually applies
+                                # the penalty should see a SMALLER raw_penalty once it takes hold.
   amp: true                    # only actually used when a CUDA device is available -- see scripts/02_train.py
   num_workers: 2                 # docs/DESIGN.md section 8; full measurement history in docs/FINDINGS.md
                                   # ("Storage medium, not DataLoader configuration, was the training
