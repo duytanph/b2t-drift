@@ -63,6 +63,12 @@ SHUFFLED_CONTROL_FIELDNAMES = [
 
 
 def _build_model(model_config: dict, n_sessions: int) -> GRUCTC:
+    # Every key that changes the module's shape or its state_dict layout
+    # must be threaded through, or load_checkpoint fails: patch_size
+    # changes the GRU's input_size, day_layer_parameterization changes
+    # which per-session tensors DayLayers owns (scale vs. weights). The
+    # `.get(...)` defaults match GRUCTC's own and scripts/02_train.py, so
+    # checkpoints written before these keys existed still load.
     return GRUCTC(
         n_sessions=n_sessions,
         hidden_size=model_config["hidden_size"],
@@ -72,6 +78,10 @@ def _build_model(model_config: dict, n_sessions: int) -> GRUCTC:
         use_day_layers=model_config["use_day_layers"],
         input_dropout=model_config["input_dropout"],
         smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
+        patch_size=model_config.get("patch_size", 1),
+        patch_stride=model_config.get("patch_stride", 1),
+        day_layer_parameterization=model_config.get("day_layer_parameterization", "full"),
+        day_layer_rank=model_config.get("day_layer_rank", 16),
     )
 
 
