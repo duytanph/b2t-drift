@@ -71,14 +71,21 @@ facts and terminology.
 - `splits/` — versioned session split manifests (JSON)
 - `data/` — local data (gitignored, obtained from Dryad — see Setup)
 - `runs/` — training run outputs (gitignored)
+- `results/` — per-cut-point drift-curve CSVs (`per_session_metrics.csv`
+  per cut point, plus the combined `drift_curve.csv`) — the project's
+  actual numeric results, versioned
 - `figures/` — generated plots
 
 ## Status
 
-Environment, data inventory, and label-encoding verification complete (see
-`GLOSSARY.md` "Dataset facts"); pipeline built and validated; architecture
-settled (`docs/FINDINGS.md`: "Day layers are unstable when trained jointly
-across many sessions"). The cut-point drift sweep has not been run yet.
+The four-cut-point drift sweep (s05/s10/s15/s20) is complete under the
+settled architecture; the combined drift curve, per-cut CSVs, and error
+breakdown are in `results/` and `figures/`. Per the pre-committed
+cut-point selection rule, **s05 is the primary analysis, with s15
+reported alongside as a robustness check** (`docs/FINDINGS.md`: "The
+cut-point sweep: calibration-data advantage is front-loaded and fades by
+~100 days"). The headline result: calibration-data advantage is real but
+short-lived, largely erased by ~100 days regardless of training-set size.
 
 **On absolute PER.** Our pipeline reaches val PER **0.296** on the official
 split, against the published baseline's **0.101**. The remaining gap is

@@ -400,6 +400,33 @@ using only that anchor, before s05/s10/s20 have been trained.
   keeps the whole rule (both the original "largest acceptable cut" logic
   and this threshold) pre-committed rather than post-hoc.
 
+**Addendum (2026-09-11): the rule applied, now that all four cut points have
+been trained** (`docs/FINDINGS.md`: "The cut-point sweep: calibration-data
+advantage is front-loaded and fades by ~100 days").
+
+All four validation PERs -- s05 0.15765, s10 0.16054, s15 0.16932, s20
+0.16566 -- are acceptable under the 0.45 threshold and fall within a
+**0.012-wide band**, well inside the 0.02 comparability band. **The rule
+selects the earliest acceptable cut point: s05.** Decision recorded: **s05
+is the PRIMARY analysis**, with s15 reported alongside as a robustness
+check, and the curve's shape (step-then-plateau) confirmed consistent
+across all four cut points independently.
+
+**The rule's own limitation, recorded plainly rather than papered over.**
+It weighs only validation PER and curve resolution, and is silent on
+generalization to unseen sessions and on training stability. Had it
+weighed those, s10 or s15 would have been preferred: s05 has the worst
+unseen-session generalization of the four (a 0.12 PER gap between its
+validation set and its earliest held-out session, at +2d, vs. s15's 0.008
+at +5d) and the least stable late training (train loss and gradient norms
+rise sharply after ~epoch 115, where s10/s15/s20 stay flat or mildly
+noisy). **The rule was followed rather than overridden, because it was
+fixed before any of these values existed** -- overriding it after seeing
+the outcome would make the selection post-hoc, exactly the failure mode
+recording it in advance exists to prevent. This is the same reasoning
+that governed the original rule's timing (previous bullet), applied
+symmetrically to an outcome the rule-writer might not have chosen by eye.
+
 ---
 
 ### Storage medium, not DataLoader configuration, was the training bottleneck (2026-09-03 to 2026-09-04)
@@ -630,6 +657,8 @@ entry would otherwise reasonably suspect the opposite.
 
 ### The confounded substitution rate and its correction (2026-09-09)
 
+**SUPERSEDED by "Substitution rate among emitted phonemes rises under the settled architecture — the old flatness was a ceiling artifact" (2026-09-11).** The flat-slope conclusion below was measured on the old architecture (val PER 0.353); under the settled architecture the slope rises. The methodological correction in this entry (substitution rate must be normalized against commitments, not reference length) is NOT superseded and still stands — see the new entry for what changed and what didn't.
+
 **Question:** Deletion rate rose `+0.049`/100d while (reference-length-
 normalized) substitution rate FELL `-0.021`/100d across the 22-session
 drift curve -- read at the time as evidence for "channels going quiet"
@@ -668,6 +697,8 @@ output, not a one-off recomputation.
 ---
 
 ### The effective-signal control: the drift curve stops measuring degradation partway through (2026-09-09)
+
+**SUPERSEDED by "Effective signal does not collapse under the settled architecture" (2026-09-11).** The collapse-by-+75d / statistically-zero-by-+453d conclusion below was measured on the old architecture (val PER 0.353); under the settled architecture (val PER 0.169) effective signal never reaches statistical zero in three of the four cut points. The control ITSELF, and the reasoning for why raw PER cannot substitute for it, are NOT superseded — see the new entry for what changed and why the control still mattered.
 
 **Question:** At +546 days, real-feature PER (0.857) and shuffled-feature
 PER (0.869, features replaced with a length-compatible donor trial from
@@ -736,6 +767,8 @@ LARGER than the observed 18-month drift itself.
 ---
 
 ### The full 22-session drift curve: rapid early rise, then a flat plateau (2026-09-09)
+
+**SUPERSEDED by "The full drift curve under the settled architecture: steeper rise, same shape" (2026-09-11).** The specific numbers below (absolute change, slope, segment slopes) were measured on the old architecture (val PER 0.353) and are superseded by larger values under the settled architecture. The step-then-plateau SHAPE conclusion is NOT superseded — it survives and is now confirmed independently across three separately-trained models, not just this one.
 
 **Question:** What does the s15 checkpoint's PER actually look like
 across all 22 evaluable held-out sessions (not just the 2 endpoints), and
@@ -1029,3 +1062,280 @@ day_layer_parameterization: diagonal, day_layer_penalty: 300.0,
 max_epochs: 150, patience: 150`. `docs/DESIGN.md` sections 5 and 10 are
 updated to the resolved decision; the round-4 "open question about
 whether to keep day layers at all" is closed.
+
+---
+
+### The identity-day-layer redirect control, repeated under diagonal day layers: the gap is gone (2026-09-10)
+
+**Question:** "The identity-day-layer redirect control" (above) measured
+a `+0.313` PER cost to redirecting a trained day layer to an untrained
+(identity) slice, on the OLD architecture's `"full"` parameterization.
+The settled architecture uses `"diagonal"` instead (`docs/FINDINGS.md`:
+"Day layers are unstable when trained jointly across many sessions").
+Does the same gap hold?
+
+**Method:** Repeated the control exactly as before
+(`scratch/r6_redirect_control.py`), against the settled checkpoint
+(`runs/r5_2_patch_diag_l300/checkpoint_best.pt`: diagonal day layers,
+λ300, patch 14/4). Same three training sessions (`t15.2023.09.03`,
+`t15.2023.09.01`, `t15.2023.08.20`), same redirect target
+(`t15.2023.10.20`, held-out, verified exact identity: `max|scale−1|=0`,
+`max|bias|=0`), same method: evaluate each session's own validation
+trials twice, once with its trained day-layer slice and once with
+`session_indices` redirected to the identity slice. Checkpoint file
+confirmed byte-identical (sha256) before and after.
+
+**Result:** Average difference (identity minus trained) across the 3
+sessions: **−0.0038** (individually: `t15.2023.09.03` −0.0011,
+`t15.2023.09.01` −0.0020, `t15.2023.08.20` −0.0084) — essentially zero,
+and if anything slightly *negative* (identity is marginally better than
+the trained slice, within noise). The trained diagonal slices barely
+leave identity in the first place: `max|scale−1|` ranges 0.024–0.026,
+`max|bias|` ranges 0.024–0.031 across the three sessions — an order of
+magnitude smaller than the old `"full"` architecture's per-session
+deviations.
+
+**Consequence:** **With diagonal day layers, per-session calibration is
+close to unnecessary** — a trained slice changes its own session's PER
+by essentially nothing. This is a substantive finding about BCI
+calibration practice (`docs/DESIGN.md` section 5): constraining the
+per-session correction to per-channel scaling makes the day layer nearly
+free to omit, and the old `+0.313` figure was a property of the more
+expressive `"full"` parameterization's capacity to memorize a session,
+not evidence that per-session correction is inherently valuable. This
+directly reframes Question 3 — see `docs/DESIGN.md` section 5 for the
+revised framing and the open question it leaves for Arm 2's own
+single-session, frozen-backbone fitting regime, which this
+joint-training measurement does not settle either way.
+
+---
+
+### Effective signal does not collapse under the settled architecture (2026-09-11)
+
+**Supersedes** "The effective-signal control: the drift curve stops
+measuring degradation partway through" (2026-09-09), whose collapse
+conclusion was measured on the OLD architecture (val PER 0.353). All
+numbers below are corrections driven by a better decoder, not errors in
+the original measurement -- the old numbers were the correct reading of
+the model that existed when they were taken.
+
+**Question:** The settled architecture (patch 14/4, diagonal day layers,
+val PER 0.169 -- roughly half the old error rate) reaches this project's
+drift curve differently from the old one. Does it still show the old
+decoder's effective-signal collapse, or was that collapse a property of a
+weak decoder rather than of the data?
+
+**Method:** `scripts/03_evaluate.py --shuffled-control` re-run against
+the settled architecture's checkpoints for all four cut points
+(`docs/FINDINGS.md`: "The cut-point sweep: calibration-data advantage is
+front-loaded and fades by ~100 days"), reading `effective_signal` per
+session exactly as the superseded entry did.
+
+**Result:** On s15, `effective_signal` is **0.755 at +5d**, **0.213 at
++75d** (vs. the old architecture's 0.148 and 0.025 at the same offsets),
+and **0.072 at +546d with a 95% CI of [0.041, 0.106]** -- clear of zero.
+Every one of the 22 s15 sessions is CI-separated from zero. Across the
+full sweep, `effective_signal` never reaches statistical zero in s10,
+s15, or s20; only marginally in s05, at +504d (2 sessions, both with a CI
+barely spanning zero). Descriptive slopes per 100 days: s05 −0.078, s10
+−0.093, s15 −0.074, s20 −0.030.
+
+**Consequence:** **The collapse was a property of a weak decoder, not of
+the data.** The drift curve now measures genuine degradation across
+close to the full ~18-month range this project set out to characterize,
+not degradation for ~75 days followed by ~470 days of noise about a
+failed decoder. This also demonstrates directly why the effective-signal
+control was worth building: raw PER alone (0.857 real vs. 0.869 shuffled
+at +546d, OLD architecture) could not distinguish a genuinely degraded
+decoder from one that had stopped using neural information -- only the
+shuffled-input comparison could, and it is this same control that now
+shows the settled architecture has NOT stopped using neural information
+anywhere in the observed range. `docs/DESIGN.md` sections 7 and 9 are
+updated to match.
+
+---
+
+### The full drift curve under the settled architecture: steeper rise, same shape (2026-09-11)
+
+**Supersedes** "The full 22-session drift curve: rapid early rise, then
+a flat plateau" (2026-09-09), whose numbers were measured on the OLD
+architecture (val PER 0.353). A correction driven by a better decoder,
+not an error in the original measurement.
+
+**Question:** Does the settled architecture's (val PER 0.169) drift
+curve show the same step-then-plateau shape as the old one, or does a
+stronger decoder degrade differently?
+
+**Method:** Same method as the superseded entry, re-run against the
+settled s15 checkpoint and, this round, independently against three more
+checkpoints (s05, s10, s20 -- `docs/FINDINGS.md`: "The cut-point sweep:
+calibration-data advantage is front-loaded and fades by ~100 days") --
+the shape claim is now checked across four separately-trained models,
+not asserted from one.
+
+**Result:** s15: PER **0.1768 at +5d** rising to **0.7536 at +546d**,
+absolute **+0.577**, relative **+326%**. Descriptive slope **+0.069**
+PER per 100 days. Early segment (≤150d) **+0.326**/100d, late segment
+(>150d) **+0.021**/100d -- ratio **15.7×**. Independently: s05's ratio is
+**~23×**, s10's is **~24×**; s20 is consistent everywhere it has
+coverage, though its own held-out sessions start at +100d (past the
+steep segment), so it cannot check the ratio directly.
+
+**Consequence:** The absolute numbers above are superseded (the old
++0.205/+0.028/+0.114/+0.013 were correct for the old decoder, not wrong
+measurements). **The qualitative shape claim survives and is
+strengthened**: most of the observed change happens in the first ~150
+days, then a noisy plateau -- now confirmed independently in three
+separately-trained models (s05, s10, s15), not asserted from one. The
+plateau is steeper and the total drift larger under the stronger decoder
+(+0.577 vs. +0.205): a better decoder starts from a much lower PER, has
+more room to lose across 18 months, and loses more of it in absolute
+terms even though it stays far ahead of the old decoder throughout.
+
+---
+
+### Substitution rate among emitted phonemes rises under the settled architecture -- the old flatness was a ceiling artifact (2026-09-11)
+
+**Supersedes** "The confounded substitution rate and its correction"
+(2026-09-09)'s flat-slope conclusion (−0.0027/100d), measured on the OLD
+architecture. Its methodological correction -- that substitution rate
+must be normalized against commitments, not reference length, because
+the latter is confounded with emission rate -- is NOT superseded and
+still stands; this entry only revises what the corrected quantity shows
+once measured on a decoder good enough to have room to move on it.
+
+**Question:** Does `substitution_rate_among_emitted` still look flat
+under the settled architecture, or does the attribution conclusion built
+on its flatness ("channels going quiet, not tuning change") change?
+
+**Method:** Same quantity, same method, re-measured on the settled
+architecture across all four cut points.
+
+**Result:** `substitution_rate_among_emitted` **RISES** in every cut
+point: s05 +0.058, s10 +0.082, s15 +0.062, s20 +0.036 per 100 days --
+alongside `deletion_rate`, which also rises everywhere (s05 +0.062, s10
++0.033, s15 +0.035, s20 +0.011). On s15 specifically it goes from
+**0.126 at +5d to 0.632 at +546d**.
+
+Why it looked flat before: the old decoder was already at ~43%
+wrong-per-commitment at +5 days (mean 0.428 across the old 22-session
+curve) -- near its own floor on that axis, with almost nowhere further
+to degrade except into deletions. **The flatness was a ceiling artifact
+of a decoder that started out already bad on this axis, not a real
+property of the underlying drift mechanism.** The settled decoder starts
+at 12.6% (a real margin above its own floor) and visibly degrades on
+both axes as elapsed time grows.
+
+**Consequence:** **The attribution revises: BOTH SNR loss (channels
+going quiet, reflected in rising deletions) and tuning change (a
+shifting phoneme-to-channel mapping, reflected in rising
+substitution-among-emitted) contribute -- not SNR loss alone.** This
+makes Phase 2's planned diagnostics (channel mortality, phoneme-tuning
+matrices, subspace-angle measurements -- `docs/DESIGN.md` section 6)
+**more necessary, not less**: there are now two mechanisms to separate
+and attribute, rather than one to confirm. The methodological point from
+the superseded entry is unchanged: normalizing substitutions by
+reference length is confounded with emission rate, and
+`substitution_rate_among_emitted` is the correct quantity to track --
+that correction was right, and it is precisely what let this round
+detect the rise the old, ceiling-limited architecture could not show.
+
+---
+
+### The cut-point sweep: calibration-data advantage is front-loaded and fades by ~100 days (2026-09-11)
+
+**Question:** With the architecture settled (patch 14/4, diagonal day
+layers, λ300), does the s15 drift curve's shape depend on the arbitrary
+choice of a 1-15 training cut, and how much does more calibration data
+actually buy against drift?
+
+**Method:** Trained and evaluated the three remaining cut points
+(s05 = sessions 1-5, s10 = 1-10, s20 = 1-20) with the identical settled
+config, `--shuffled-control` against every held-out session, alongside
+s15 (already trained in round 5). `scripts/04_drift_curve.py` combined
+all four into one figure (`figures/drift_curve.png`).
+
+**Result:**
+
+*Training.* s05 best val PER **0.15765 @ epoch 111** (908 trials), s10
+**0.16054 @ 105** (2,098), s15 **0.16932 @ 106** (3,150), s20 **0.16566 @
+87** (3,336). No best epoch falls in the last 10% of its 150-epoch run
+(111/150=74%, 105/150=70%, 106/150=71%, 87/150=58%), so none is an
+upper bound. All four fall in a **0.012-wide band**.
+
+*Late-training stability scales with training-set size.* s05
+destabilizes after ~epoch 115 (train loss and gradient norms rise
+sharply); its checkpoint at epoch 111 precedes this and is unaffected.
+s10 and s20 show only mild late upticks; s15 is flat. Smaller training
+sets overfit and destabilize -- a real, if secondary, cost of choosing a
+smaller cut.
+
+**THE HEADLINE RESULT: calibration-data advantage is front-loaded and
+largely erased by ~100 days.** At matched elapsed time near the
+training boundary, s05 (908 trials) gives PER 0.277-0.370 at +2 to +9
+days and s10 (2,098 trials) gives 0.277-0.281 at the same offsets, while
+s15's (3,150 trials) +5d point is 0.177 -- a real, large spread. By
+~100 days elapsed, s05 is 0.675, s10 0.669 (at +91d), s20 (3,336
+trials) 0.643 -- all within **0.03 PER** of each other despite a
+**3.7×** range in training-set size. **Front-loading calibration has a
+short half-life: additional participant time at implant buys roughly
+three months of advantage, not durable performance.** This reframes
+Question 3 from "how much [calibration data] to collect once" to "how
+often, and how cheaply, to top up."
+
+**The generalization gap scales with active session count, not just
+trial count.** Every cut loses session 1 to the corpus filter (100%
+50-Word, `docs/DESIGN.md` section 7), so active Switchboard-contributing
+sessions are: s05 4, s10 9, s15 14, s20 19. The gap between each cut's
+own validation PER and its earliest held-out session's PER: s05 0.12
+(0.158 val vs. 0.277 at +2d), s10 ~0.116 (0.161 vs. 0.277 at +2d), s15
+0.008 (0.169 vs. 0.177 at +5d). The gap barely moves from 4 to 9 active
+sessions (908→2,098 trials, +131%) then collapses from 9 to 14 (2,098→
+3,150 trials, +50%) -- consistent with a session-count effect rather
+than a trial-count one, though the s05-to-s10 step alone doesn't
+cleanly isolate it. **s20 (19 active sessions, MORE trials than s15)
+would be the clean test, but its behavior is AMBIGUOUS on this
+question**: its earliest held-out session is +16d (non-passing, 24
+trials) and its earliest PASSING session is +100d -- neither sits close
+enough to its own cut boundary to measure a comparable early gap, so
+s20 neither confirms nor refutes the session-count reading.
+
+**Important confound, recorded explicitly.** The same-calendar-session
+comparison across cut points (the same recording evaluated under
+different cuts) cannot separate "more calibration data" from "less
+elapsed time," because a larger cut point is also chronologically later
+-- the same session sits closer to a bigger cut's boundary by
+construction. The headline result above avoids this by comparing PER at
+MATCHED elapsed time (not matched calendar session) across cuts of
+different size, which is the unconfounded comparison.
+
+**Shape consistency.** s05, s10, and s15 agree closely: early
+(≤150d)/late (>150d) PER slope ratio 15-24×, `effective_signal` starting
+0.6-0.76 and declining −0.07 to −0.09/100d, plateau PER settling
+0.74-0.80. s20 appears flatter (ratio ~9×) but its first passing session
+is at +100d, so it has no coverage of the steep early segment at all.
+**Stated precisely rather than forced either way: the shape is
+consistent everywhere s20 has coverage to check it; s20 simply cannot
+observe the early climb, and this is a coverage gap, not evidence the
+shape differs.**
+
+**`t15.2025.03.16` is a confirmed outlier, not a bug in full.** Anomalous
+shuffled-control PER in three of the four cut points, at three different
+day offsets (+534d under s10, +518d under s15, +485d under s20), from
+three separately trained models -- decisive evidence it is a property of
+the session, not of any one model or cut. A donor-selection bug that
+ignored the model's post-patch length accounted for PART of it
+(`per_shuffled` 0.998 → 0.991 on s15 after the fix, committed as
+`6a30120`); the remainder is real: the session uniquely combines
+`seq_len` up to 110 with recordings down to 149 frames. Flagged as an
+outlier on the combined figure; not corrected further.
+
+**Consequence:** applying the pre-committed cut-point selection rule
+(`docs/FINDINGS.md`: "Pre-committed cut-point selection rule" addendum,
+2026-09-11) selects **s05** as the primary cut point, with s15 reported
+alongside as a robustness check -- see that addendum for the rule's own
+acknowledged blind spot (generalization and stability, both of which
+favor s15 or s10) and why the rule was followed rather than overridden.
+`figures/drift_curve.png`, `figures/error_breakdown.png`, and the four
+`results/*/per_session_metrics.csv` files are the artifacts this entry
+describes.

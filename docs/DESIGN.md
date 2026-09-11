@@ -25,9 +25,12 @@ strategies under a fixed budget of participant time.
 PER-vs-days-elapsed curve. Temporal only, never shuffled. Switchboard-only
 is the primary analysis.
 
-**Status:** data verified, pipeline built (a batch-composition bug found
-and fixed), hyperparameters set, dataloader bottleneck resolved — no
-drift-curve model has been trained yet.
+**Status:** architecture settled, the four-cut drift sweep is complete,
+and the primary drift curve has been produced (`docs/FINDINGS.md`: "The
+cut-point sweep: calibration-data advantage is front-loaded and fades by
+~100 days"). s05 is the primary analysis per the pre-committed
+cut-point-selection rule; s15 is reported alongside as a robustness
+check.
 
 ---
 
@@ -122,19 +125,50 @@ of the release. Removed rather than kept as a strawman.
 | **2 — new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | Structurally identical to the `day_weights`/`day_biases` layers found in the official checkpoint (`docs/FINDINGS.md`). More degrees of freedom than Arm 1; can partially compensate for a shifted phoneme-to-channel mapping. |
 | **3 — fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | Highest participant-time and compute cost. **Catastrophic-forgetting risk at small N**: too little new-day data and whole-network fine-tuning can overfit to the N calibration sentences, losing generalization the frozen-backbone arms would have kept. |
 
-**The day-layer gap (0.313) exceeds 18 months of observed drift (0.205)
-— recalibration is the DOMINANT effect here, not a secondary one.**
-Measured directly (`docs/FINDINGS.md`: "The identity-day-layer redirect
-control"): redirecting a training session's day-layer index to an
-untrained (identity) slice costs +0.313 PER on average, while the
-entire observed drift from +5d to +546d is +0.205 PER
-(`docs/FINDINGS.md`: "The full 22-session drift curve"). A single day's
-Arm 2 recalibration therefore has more headroom to recover than 18
-months of drift has room to lose — this reframes Question 3 from "how
-much does drift cost, and can recalibration offset some of it" to
-"recalibration recovers more than drift ever takes away, so the DECISION
-question is really about cost-efficiency (how little labeled data
-achieves that recovery), not whether recalibration helps at all."
+**Per-session calibration is nearly unnecessary once the day layer is
+constrained to per-channel scaling — a substantive finding about BCI
+calibration practice, not merely a retraction.** The `+0.313` day-layer
+gap and the "recalibration is dominant" framing below were measured on
+the OLD architecture's `"full"` (512×512) parameterization and do not
+hold under the settled `"diagonal"` one; both halves of the old
+comparison have since moved, in opposite directions. Repeating the
+identity-redirect control under the settled checkpoint (`docs/FINDINGS.md`:
+"The identity-day-layer redirect control, repeated under diagonal day
+layers"): average
+difference (identity minus trained) across the same three training
+sessions is **−0.0038** (individually −0.0011, −0.0020, −0.0084) —
+removing a trained diagonal slice costs nothing, and is marginally
+*better*, within noise. Trained diagonal slices barely leave identity
+(`max|scale−1| ≈ 0.025`). Meanwhile 18 months of observed drift is now
+**+0.577**, not 0.205 (`docs/FINDINGS.md`: "The full drift curve under
+the settled architecture").
+
+Read this as a finding, not a null result: constraining the per-session
+correction to per-channel scaling makes the day layer nearly free to
+omit. The old `+0.313` figure was a property of the `"full"` 512×512
+parameterization, which had enough capacity to memorize a session's
+idiosyncrasies rather than correct a genuine drift — so removing it
+looked like losing something real when it wasn't. That per-session
+calibration appears necessary in prior work may partly reflect
+over-powered parameterizations rather than a genuine requirement of the
+underlying problem.
+
+**Question 3 reframes accordingly.** It is no longer "does recalibration
+help immediately" — at +5 days the held-out gap is 0.008 and there is
+nothing to recover. It becomes: **how much accumulated drift can a small
+labeled budget recover, and at what elapsed time does recalibration stop
+being sufficient?** Degradation is real and growing (18-month drift
++0.577; at s15's late range, real PER 0.754 against a shuffled ceiling
+of 0.825), so there remains something for Arm 2 to fix — just not on day
+one.
+
+**Open question, recorded explicitly rather than prejudged.** Diagonal
+slices barely move when trained JOINTLY across ~14 sessions under a
+`λ=300` anchor pulling them toward identity. Whether a DEDICATED diagonal
+fit on ONE heavily-drifted session — frozen backbone, no joint-training
+anchor pulling it back — has the capacity to recover accumulated drift is
+a different question that this round's joint-training result does not
+settle either way. Arm 2's own experiments must answer it empirically.
 
 **Arm 2 uses the `"diagonal"` parameterization; `"full"` is confirmed
 unworkable when trained jointly.** Model A trained all 45 `"full"`
@@ -169,8 +203,11 @@ best day-layer config (patched, `"diagonal"`, λ300) reached val PER
 **0.16932** vs. **0.1697** for the best no-day-layer config — a
 **−0.0004** gap, i.e. the day-layer model was marginally *better*, and
 the gap is ~1/75th of the rule's 0.03 threshold. The day-layer
-mechanism costs nothing once parameterized correctly, so it stays, and
-Question 3's Arm 2 and the +0.313 day-layer-gap finding both stand.
+mechanism costs nothing once parameterized correctly, so it stays. This
+keeps Arm 2's mechanism available for whatever it turns out to be worth
+recovering at non-trivial elapsed times — see this section's revised
+framing above; the day-0 `+0.313` gap this decision was originally
+weighed against no longer holds.
 
 ---
 
@@ -260,22 +297,34 @@ sessions). This is why the sweep stops at 1–20.
   cut-point model. Session 16 is a valid validation source for the 1–15
   cut but must never be used for the 1–5 cut's evaluation of session 16.
 
-**s15's 126-day coverage gap (days +7 to +133) sits exactly across the
-region where effective signal collapses — a consequence of the sweep
-design, not a flaw to engineer around.** The gap itself
-(`docs/FINDINGS.md`: "Cut-point sweep manifests built and validated; a
-126-day coverage gap") means s15 has no eval point between +7d and
-+133d — exactly the window where `effective_signal` falls from ~0.15
-(day +5/+7) toward the ~0.02–0.03 range it holds from +133 onward
-(`docs/FINDINGS.md`: "The effective-signal control"). s15 alone can
-therefore only establish that the collapse has ALREADY mostly happened
-by +133d, not resolve where within that gap it actually occurs. **s05**
-(27 passing sessions, day-offset range starting at +2 — `docs/FINDINGS.md`'s
-cut-point table) is the cut point better positioned to characterize the
-collapse itself, once trained, since its early eval points sit inside
-the exact window s15 skips. This is precisely why the sweep runs at
-multiple cut points (this section's opening rationale) rather than
-committing to s15 alone.
+**s15's 126-day coverage gap (days +7 to +133) is resolved: the region
+is a smooth ramp, not a collapse, and this is a direct payoff of the
+sweep design, not a workaround.** The gap itself (`docs/FINDINGS.md`:
+"Cut-point sweep manifests built and validated; a 126-day coverage gap")
+means s15 has no eval point between +7d and +133d. Under the settled
+architecture, s05's densely-sampled +2-to-+133d region shows PER **0.277
+at +2d, 0.370 at +9d, 0.490 at +30d, roughly 0.51–0.60 across +37 to
++58d, 0.675 at +100d, 0.746 at +126d** — a smooth, continuous rise with
+no discontinuity (`docs/FINDINGS.md`: "The cut-point sweep:
+calibration-data advantage is front-loaded and fades by ~100 days");
+s10 corroborates independently with its own dense early sampling. **The
+apparent "step at the training boundary" in s15 was an artifact of
+having no data between +7 and +133 days, not evidence of a sudden
+transition.** This is precisely why the sweep runs at multiple cut
+points (this section's opening rationale) rather than committing to
+s15 alone: it existed to test whether the result depended on an
+arbitrary cut, and it resolved a shape s15 alone could not see.
+
+**Primary cut-point decision, recorded.** Applying the pre-committed
+selection rule (below) to all four trained cut points selects **s05**
+as the primary analysis, with **s15 reported alongside as a robustness
+check** (`docs/FINDINGS.md`: "Pre-committed cut-point selection rule"
+addendum, 2026-09-11, and "The cut-point sweep..."). The rule weighs
+only validation PER and curve resolution — it is silent on
+generalization to unseen sessions and training stability, both of which
+s05 scores worst on of the four cuts. It was followed rather than
+overridden because it was fixed before any of these values existed; see
+the FINDINGS addendum for the full reasoning.
 
 **Corpus stratification.** Switchboard-only, both train and eval, is the
 **primary analysis** (`splits/temporal_s01_s*_switchboard.json`);
@@ -398,11 +447,16 @@ gracefully" or "already extracting nothing," and raw PER alone cannot
 tell the two apart. `effective_signal` can: it is the PER gap between
 the model's real decode and its decode of scrambled input for the SAME
 session, i.e. how much the model gains from receiving genuine neural
-data. It falls to near-zero (`docs/FINDINGS.md`'s measured slope:
-−0.0140 per 100 days, reaching statistical zero by +453d) exactly where
-the decoder has stopped using neural information, regardless of what raw
-PER happens to read there. Report it alongside every drift-curve PER
-value from a cut point onward, not only at the two endpoints.
+data. Under the architecture in use when this metric was introduced, it
+fell to near-zero by +453d (`docs/FINDINGS.md`: "The effective-signal
+control", now superseded); under the settled architecture (section 10)
+it instead stays clear of zero across the full observed range
+(`docs/FINDINGS.md`: "Effective signal does not collapse under the
+settled architecture") — exactly the distinction this metric exists to
+draw, and a demonstration that it tracks the DECODER's actual use of
+neural information rather than a fixed property of the data. Report it
+alongside every drift-curve PER value from a cut point onward, not only
+at the two endpoints.
 
 ---
 
@@ -429,7 +483,7 @@ literature), `judgment call` (reasonable given constraints, not derived),
 | `patch_stride` | 4 | 4 | Step the 14-bin window every 4 bins (80 ms output stride — the published real-time phoneme rate). Paired with `patch_size`; both read from `self`, so `_patch` and `ctc_input_lengths` cannot disagree. | principled |
 | `day_layer_parameterization` | `"diagonal"` | `"full"` (512×512 per session) | Per-channel gain+offset only, 1,024 params/session vs. `"full"`'s 262,656. `"full"` **diverges** when all 45 session slices train jointly, even at `day_layer_penalty=3000` (`docs/FINDINGS.md`: "Day layers are unstable when trained jointly across many sessions"); `"diagonal"` is stable and reached full PER parity with the no-day-layer config on s15, with slices staying within `max|W−I| ≈ 0.04` of identity after 150 epochs. It is also the parameterization Arm 2 (`docs/DESIGN.md` section 5) can realistically fit from 10–50 labelled sentences. `"lowrank"` remains implemented and untested. | judgment call — `"full"` matches the published checkpoint but is unworkable jointly at this scale |
 | `day_layer_penalty` (λ) | 300.0 | n/a (published checkpoint's day layers are unregularized) | Weight on `DayLayers.identity_penalty()`, added to the CTC loss. The penalty is **Ridge-style in form** (a squared Frobenius norm of the per-session weight deviation plus a squared-L2 bias term) **but its shrinkage target is the identity matrix `I`, not `0`** — pulling a day layer's weight toward `0` would annihilate its input (`y = x·0 + b`), whereas the no-op transform is `W = I, b = 0`. A plain `weight_decay=1e-4` diagnostic on Model A barely helped for exactly this reason: it regularized toward the wrong point. `λ=300` was measured (not guessed) to contribute ~0.11% / 3.05% / 7.89% of total loss at epochs 1 / 5 / 10 on real s15 data — an anchor, not a dominator; `λ=3000` reaches 46% by epoch 10 and starved the CTC objective (`docs/FINDINGS.md`: "Choosing the identity-anchored day-layer penalty's lambda", "Day layers are unstable…"). With `"diagonal"` the penalty is only lightly load-bearing (slices stay near identity on their own) but is kept for the cut-point sweep's smaller train sets. | judgment call — λ measured against real runs |
-| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). **KEPT by the pre-registered keep/drop rule (`docs/FINDINGS.md`: "Pre-committed rule for keeping or dropping day layers"):** the round-5 s15 comparison's best day-layer config (`"diagonal"`, λ300, patched) reached val PER 0.16932 vs. 0.1697 for the best no-day-layer config — a −0.0004 gap, far inside the rule's 0.03 band (≈3× checkpoint-selection noise). Round-4's apparent no-day-layer advantage was an artifact of comparing an unconverged run against `"full"` day layers; with `"diagonal"` and 150 epochs the mechanism costs nothing. Question 3's Arm 2 and the +0.313 day-layer-gap finding both depend on it. | principled |
+| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). **KEPT by the pre-registered keep/drop rule (`docs/FINDINGS.md`: "Pre-committed rule for keeping or dropping day layers"):** the round-5 s15 comparison's best day-layer config (`"diagonal"`, λ300, patched) reached val PER 0.16932 vs. 0.1697 for the best no-day-layer config — a −0.0004 gap, far inside the rule's 0.03 band (≈3× checkpoint-selection noise). Round-4's apparent no-day-layer advantage was an artifact of comparing an unconverged run against `"full"` day layers; with `"diagonal"` and 150 epochs the mechanism costs nothing. Question 3's Arm 2 mechanism depends on it staying available (section 5's revised framing); the day-0 gap it costs nothing against is now measured at ~0, not the +0.313 figure this decision was originally weighed against. | principled |
 
 **Memory cost of `DayLayers`.** Dense `(n_sessions, n_features,
 n_features)` float32 — 45×512×512×4 bytes ≈ 47 MB, a large fraction of
