@@ -600,6 +600,28 @@ class GRUCTC(nn.Module):
             return input_lengths
         return torch.div(input_lengths - self.patch_size, self.patch_stride, rounding_mode="floor") + 1
 
+    def _run_gru(self, packed: nn.utils.rnn.PackedSequence) -> nn.utils.rnn.PackedSequence:
+        """Run `self.gru` on an already-packed input, initial hidden state
+        zero (PyTorch's `nn.GRU` default).
+
+        Extracted as its own method ONLY so `PretrainedBaselineRNN`
+        (`models/pretrained_baseline.py`) can override it to inject the
+        official checkpoint's learned initial hidden state (`h0`, a
+        parameter this project's own architecture has no equivalent of --
+        see that module's docstring) without duplicating `forward`'s
+        surrounding padding-mask/smooth/patch logic. Not meant to be
+        overridden for any other reason.
+
+        Args:
+            packed: Output of `nn.utils.rnn.pack_padded_sequence`.
+
+        Returns:
+            The GRU's packed output (hidden state discarded -- nothing in
+            this codebase's forward pass uses the final hidden state).
+        """
+        packed_out, _ = self.gru(packed)
+        return packed_out
+
     def forward(
         self,
         features: torch.Tensor,
@@ -728,7 +750,7 @@ class GRUCTC(nn.Module):
         packed = nn.utils.rnn.pack_padded_sequence(
             x, patched_lengths.cpu(), batch_first=True, enforce_sorted=False,
         )
-        packed_out, _ = self.gru(packed)
+        packed_out = self._run_gru(packed)
         gru_out, _ = nn.utils.rnn.pad_packed_sequence(
             packed_out, batch_first=True, total_length=x.size(1),
         )

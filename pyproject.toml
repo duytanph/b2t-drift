@@ -11,6 +11,7 @@ dependencies = [
     "pyyaml",
     "matplotlib",
     "pandas",
+    "scipy>=1.17.1",
 ]
 
 # Experiment trackers, ALL OPTIONAL -- see `src/b2t_drift/training/logging.py`'s
