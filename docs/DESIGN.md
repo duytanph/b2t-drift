@@ -1,12 +1,13 @@
 # Design decisions — the durable record of WHY
 
-This file records design decisions and their justification. `docs/DATASET.md`
-records WHAT the data is; `docs/FINDINGS.md` records the dated empirical
-investigations behind these decisions; this file records why we chose to
-work with the data the way we do, as it stands now. When a decision
-changes, update this file and say why the old reasoning no longer holds —
-don't just delete it. Target length: under 400 lines. No chronology here —
-that belongs in `docs/FINDINGS.md`.
+This file records design decisions and their justification, as they
+stand now. `docs/DATASET.md` records WHAT the data is; `docs/FINDINGS.md`
+records the dated empirical investigations behind these decisions. When
+a decision changes, replace the old text with the new decision and its
+measured justification, plus a one-line pointer to the FINDINGS.md entry
+recording the change — do not narrate the revision here. If this file
+exceeds 400 lines, the excess is almost always revision narrative that
+belongs in FINDINGS.md. Target length: under 400 lines.
 
 ## Summary
 
@@ -46,24 +47,20 @@ Summary above for the one-paragraph version).
 ## 2. Terminology
 
 - **"Our split"**: the temporal train/held-out boundary this project
-  defines, cutting the 45 sessions by date into a training block (starting
-  at session 1, `t15.2023.08.11`) and everything after it. Base case:
-  sessions 1–15 train / 16–45 held out, but section 7 sweeps this cut
-  point across four values (1–5, 1–10, 1–15, 1–20) — "our split" means
-  this general design, not one fixed pair of session counts. Entirely our
-  own construction; not shipped as files.
+  defines, cutting the 45 sessions by date into a training block
+  (starting at session 1, `t15.2023.08.11`) and everything after it.
+  Swept across four cut points (1–5, 1–10, 1–15, 1–20 — section 7); "our
+  split" means this general design, not one fixed session count.
+  Entirely our own construction, not shipped as files.
 - **"Official split"**: the `data_train.hdf5` / `data_val.hdf5` /
   `data_test.hdf5` files shipped for the Brain-to-Text '25 competition.
-  Relevant here only because (1) its `test` partitions are unlabeled
-  (1,450 trials, 13% of the dataset, unusable regardless of split), and
-  (2) the provided pretrained checkpoint was trained on this split's
-  `train`/`val` data spanning **all 45 sessions** (`docs/FINDINGS.md`:
-  "Block count decreases..."), so it has no held-out future and cannot
-  measure drift.
-- **"Held-out"** always means *withheld from our model* (not in our
-  split's training block) unless stated otherwise — never the official
-  split's `val`/`test` files, which are a different withholding and (per
-  section 7) not independent of each other or useful for drift.
+  Relevant only because its `test` partitions are unlabeled (13% of the
+  dataset) and the provided pretrained checkpoint was trained on all 45
+  sessions (`docs/FINDINGS.md`: "Block count decreases..."), so it has no
+  held-out future and cannot measure drift.
+- **"Held-out"** always means *withheld from our model*, never the
+  official split's `val`/`test` files, which are a different withholding
+  and (section 7) not useful for drift.
 
 ---
 
@@ -75,19 +72,16 @@ common, easy mistake — keep them separate in every results table.
 - **Model A — official-split pipeline check.** Trained on the official
   split's `train` partition (all 45 sessions). Confirms our data loading,
   model, and training code produce a PER on the same scale as published
-  results — a correctness check, not a contribution. Run once; not part of
-  the drift experiment; not comparable to Model B (different training
-  data, different scale of task).
+  results — a correctness check, not a contribution. Not comparable to
+  Model B (different training data, different scale of task).
 - **Model B — our-split drift model.** Trained on **our split** (section
   2) — the temporal cut-point sweep. Its PER curve across held-out
   sessions **is the project**.
 - **The paper's published numbers (`docs/DATASET.md` section 2) are not a
   drift comparison, for either model.** The published system was
   continuously, periodically recalibrated; Model B is calibrated once and
-  frozen. "Maintained performance under active maintenance" and
-  "performance decay under no maintenance" are different quantities — a
-  gap between our curve and the paper's flat one is not evidence of a
-  worse decoder; it's the point of the study.
+  frozen — a gap between our curve and the paper's flat one is not
+  evidence of a worse decoder, it's the point of the study.
 
 ---
 
@@ -95,9 +89,8 @@ common, easy mistake — keep them separate in every results table.
 
 - **MEASUREMENT** — How fast does PER degrade as a function of days since
   calibration?
-- **ATTRIBUTION** — Why does it degrade? See section 6 for the current set
-  of candidate causes (revised once from four to three, after the
-  normalization mechanism was confirmed by author correspondence).
+- **ATTRIBUTION** — Why does it degrade? See section 6 for the three
+  candidate causes.
 - **DECISION** — Given a fixed budget of participant time on a new day,
   what is the best thing to spend it on? See section 5 for the candidate
   interventions ("arms").
@@ -107,16 +100,7 @@ common, easy mistake — keep them separate in every results table.
 ## 5. Recalibration strategies (Question 3 arms)
 
 Candidate interventions for the DECISION question, increasing order of
-participant-time cost. Each targets a different subset of section 6's
-attribution causes.
-
-**A fourth candidate arm — "recompute per-session z-score statistics" —
-is retired.** The released data already does something strictly better: a
-continuous rolling per-channel z-score over the previous up-to-20
-sentences, recomputed sentence by sentence (`docs/DATASET.md` section 9
-item 7). Recomputing one statistic per session would be *coarser*, and
-isn't a participant-time cost at all — it happens for free, as a property
-of the release. Removed rather than kept as a strawman.
+participant-time cost.
 
 | Arm | Labels needed | Targets | Notes |
 |---|---|---|---|
@@ -125,96 +109,39 @@ of the release. Removed rather than kept as a strawman.
 | **2 — new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | Structurally identical to the `day_weights`/`day_biases` layers found in the official checkpoint (`docs/FINDINGS.md`). More degrees of freedom than Arm 1; can partially compensate for a shifted phoneme-to-channel mapping. |
 | **3 — fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | Highest participant-time and compute cost. **Catastrophic-forgetting risk at small N**: too little new-day data and whole-network fine-tuning can overfit to the N calibration sentences, losing generalization the frozen-backbone arms would have kept. |
 
-**Per-session calibration is nearly unnecessary once the day layer is
-constrained to per-channel scaling — a substantive finding about BCI
-calibration practice, not merely a retraction.** The `+0.313` day-layer
-gap and the "recalibration is dominant" framing below were measured on
-the OLD architecture's `"full"` (512×512) parameterization and do not
-hold under the settled `"diagonal"` one; both halves of the old
-comparison have since moved, in opposite directions. Repeating the
-identity-redirect control under the settled checkpoint (`docs/FINDINGS.md`:
-"The identity-day-layer redirect control, repeated under diagonal day
-layers"): average
-difference (identity minus trained) across the same three training
-sessions is **−0.0038** (individually −0.0011, −0.0020, −0.0084) —
-removing a trained diagonal slice costs nothing, and is marginally
-*better*, within noise. Trained diagonal slices barely leave identity
-(`max|scale−1| ≈ 0.025`). Meanwhile 18 months of observed drift is now
-**+0.577**, not 0.205 (`docs/FINDINGS.md`: "The full drift curve under
-the settled architecture").
+A fourth arm — recomputing per-session z-score statistics — is retired:
+the data already does this for free via a rolling per-channel z-score
+(`docs/DATASET.md` section 9 item 7).
 
-Read this as a finding, not a null result: constraining the per-session
-correction to per-channel scaling makes the day layer nearly free to
-omit. The old `+0.313` figure was a property of the `"full"` 512×512
-parameterization, which had enough capacity to memorize a session's
-idiosyncrasies rather than correct a genuine drift — so removing it
-looked like losing something real when it wasn't. That per-session
-calibration appears necessary in prior work may partly reflect
-over-powered parameterizations rather than a genuine requirement of the
-underlying problem.
+**Arm 2 uses the `"diagonal"` parameterization** (1,024 params/session)
+at `day_layer_penalty` λ=300 — kept because the best day-layer config
+reached val PER **0.16932** vs. **0.1697** for the best no-day-layer
+config, a **−0.0004** gap inside the pre-registered 0.03 keep/drop
+threshold (`docs/FINDINGS.md`: "Pre-committed rule for keeping or
+dropping day layers"). `"full"` (262,656 params/session) diverges when
+trained jointly and is kept only as an upper-bound comparison;
+`"lowrank"` is implemented, untested (`docs/FINDINGS.md`: "Day layers
+are unstable when trained jointly across many sessions").
 
-**Question 3 reframes accordingly.** It is no longer "does recalibration
-help immediately" — at +5 days the held-out gap is 0.008 and there is
-nothing to recover. It becomes: **how much accumulated drift can a small
-labeled budget recover, and at what elapsed time does recalibration stop
-being sufficient?** Degradation is real and growing (18-month drift
-+0.577; at s15's late range, real PER 0.754 against a shuffled ceiling
-of 0.825), so there remains something for Arm 2 to fix — just not on day
-one.
-
-**Open question, recorded explicitly rather than prejudged.** Diagonal
-slices barely move when trained JOINTLY across ~14 sessions under a
-`λ=300` anchor pulling them toward identity. Whether a DEDICATED diagonal
-fit on ONE heavily-drifted session — frozen backbone, no joint-training
-anchor pulling it back — has the capacity to recover accumulated drift is
-a different question that this round's joint-training result does not
-settle either way. Arm 2's own experiments must answer it empirically.
-
-**Arm 2 uses the `"diagonal"` parameterization; `"full"` is confirmed
-unworkable when trained jointly.** Model A trained all 45 `"full"`
-day-layer slices (`docs/DATASET.md`; 11.8M of 16.6M total parameters at
-this scale) simultaneously, each against hundreds of training trials,
-with no anchor toward identity — and diverged (`docs/FINDINGS.md`:
-"Model A's initial result and divergence", "Day layers are unstable when
-trained jointly across many sessions"). The round-5 s15 comparison
-confirmed this is a **parameterization** failure, not a mechanism
-failure or an anchor-strength failure: `"full"` diverged again even with
-the identity-anchored penalty at `λ=3000` (train loss rose 1.4 → 3.5
-over training), while `"diagonal"` (1,024 params/session — per-channel
-gain and offset only) trained stably to full PER parity with a
-no-day-layer model, its slices never leaving `max|W−I| ≈ 0.04` of
-identity. `"diagonal"` is therefore the parameterization Arm 2 ships;
-`"full"` is retained only as an UPPER-BOUND comparison (PER recovery
-available with unlimited per-session capacity), and `"lowrank"`
-(16,896 params/session) is implemented but untested. That the lean
-parameterization is both the stable one AND the one fittable from 10–50
-labelled sentences is a direct de-risking of Arm 2 at small N.
-
-**Day layers are KEPT in the primary architecture (decided by a
-pre-registered rule).** Round-4's five-way s15 comparison appeared to
-show a no-day-layer model beating every day-layer variant, which would
-have undercut Arm 2's premise entirely. Round 5 re-ran the comparison
-properly — at 150 epochs (round-4's no-day-layer run had not converged,
-its best epoch was 98 of 100) and including the previously-missing
-patching + `"diagonal"` day-layer combination — under a keep/drop rule
-fixed and committed *before* the results were read (`docs/FINDINGS.md`:
-"Pre-committed rule for keeping or dropping day layers"). Outcome: the
-best day-layer config (patched, `"diagonal"`, λ300) reached val PER
-**0.16932** vs. **0.1697** for the best no-day-layer config — a
-**−0.0004** gap, i.e. the day-layer model was marginally *better*, and
-the gap is ~1/75th of the rule's 0.03 threshold. The day-layer
-mechanism costs nothing once parameterized correctly, so it stays. This
-keeps Arm 2's mechanism available for whatever it turns out to be worth
-recovering at non-trivial elapsed times — see this section's revised
-framing above; the day-0 `+0.313` gap this decision was originally
-weighed against no longer holds.
+**Per-session calibration is nearly free to omit under `"diagonal"`:**
+the identity-redirect control costs **−0.0038** PER on average, against
+**+0.313** under `"full"` (`docs/FINDINGS.md`: "The identity-day-layer
+redirect control, repeated under diagonal day layers"). **Question 3 is
+therefore "how much accumulated drift can a small labeled budget
+recover, and at what elapsed time does it stop being sufficient"** — not
+"does recalibration help immediately," since the +5-day held-out gap is
+0.008 (`docs/FINDINGS.md`: "The cut-point sweep: calibration-data
+advantage is front-loaded and fades by ~100 days"). Whether a dedicated
+diagonal fit on ONE drifted session, frozen backbone, no anchor, has the
+capacity to recover accumulated drift is open — the joint-training
+result above does not settle it.
 
 ---
 
 ## 6. What a rising PER curve means
 
-The release pipeline applies **three independent adaptive corrections, at
-three different timescales**, before any data reaches our model. This
+The release pipeline applies three independent adaptive corrections, at
+three different timescales, before any data reaches our model. This
 determines what the ATTRIBUTION question (section 4) can and cannot
 conclude, and motivates the arms in section 5.
 
@@ -224,136 +151,79 @@ conclude, and motivates the arms in section 5.
 | 2 | Rolling per-channel z-score (`docs/DATASET.md` section 9 item 7) | 20 sentences (rolling) | Per-channel gain/offset (affine) changes |
 | 3 | Day-specific input layer (`docs/FINDINGS.md`: "Block count decreases...") | Trained per session | Whatever a learned linear map can capture — starts at identity, contributes nothing until trained |
 
-- **Stage 1** tracks noise, not signal: as an electrode becomes
-  encapsulated, spike amplitude shrinks while the noise floor holds
-  steady, so SNR falls and crossing rate genuinely declines — the
-  threshold has no mechanism to compensate. **Caveat:** a channel can be
-  actively dying while its crossing rate *appears* stable if the noise
-  floor happens to move the same direction. **Channel-mortality analysis
-  must use recovered raw spike counts (Hz, via `docs/DATASET.md` section 9
-  item 9) and the +10 clip-saturation signature (item 8), not crossing
-  rate alone.**
-- **Stage 2** removes per-channel affine changes only. It does **not**
-  remove: which channels respond to which phonemes, inter-channel
-  correlation structure (scale-invariant), the geometry of population
-  activity (a 256-d rotation isn't undone by 256 independent rescalings),
-  or temporal structure within a sentence.
-- **Stage 3** is our own intervention (Arm 2, section 5), not something
-  upstream — do not confuse it with stages 1–2.
+Stage 1 tracks noise, not signal: as an electrode becomes encapsulated,
+spike amplitude shrinks while the noise floor holds steady, so SNR falls
+and crossing rate genuinely declines — a channel can appear stable while
+dying if the noise floor moves with it, so channel-mortality analysis
+must use recovered raw spike counts and the +10 clip-saturation
+signature (`docs/DATASET.md` section 9 items 8–9), not crossing rate
+alone. Stage 2 removes per-channel affine changes only, not channel
+mixing or population geometry. Stage 3 is our own intervention (Arm 2),
+not something upstream.
 
-**Attribution reduces from four candidates to three:**
-- **Channel death** — an electrode stops producing usable signal.
-  Non-obvious interaction: z-scoring may *amplify* channel death rather
-  than hide it (dividing a near-zero-variance channel by its own near-zero
-  std inflates residual noise back to unit variance; the +10 clip then
-  caps it). Check empirically before relying on this as an explanation.
-- **Tuning change** — phoneme-to-channel mapping shifts (e.g. tissue/
-  electrode geometry changes). Not fixable by rescaling. Targeted by Arm 2.
-- **Subspace rotation** — the population-activity manifold's orientation
-  changes. Correctable in principle by a linear map (Arm 1, and within
-  reach of Arm 2).
-- **Marginal drift (gain/offset, noise-floor drift) is removed from view
-  by stages 1–2 and cannot be studied with this release** — it is no
-  longer a fourth candidate.
-
-**What this buys the measurement.** Any degradation the drift curve shows
-has already survived three independent, causal (past/current data only)
-adaptive corrections. It therefore cannot be attributed to scaling, gain,
-offset, or noise-floor drift — whatever is left is SNR loss, tuning
-change, or subspace-geometry change. The curve is meaningful precisely
-because the easy explanations are already ruled out by the data itself.
+**Attribution: both SNR loss and tuning change contribute, not SNR loss
+alone.** `deletion_rate` and `substitution_rate_among_emitted` both rise
+with elapsed time in every cut point of the sweep (`docs/FINDINGS.md`:
+"Substitution rate among emitted phonemes rises under the settled
+architecture -- the old flatness was a ceiling artifact") — deletions
+point at channels going quiet, rising substitution-among-emitted at a
+shifting phoneme-to-channel mapping. Subspace rotation remains a
+candidate but is not yet measured directly.
+Marginal drift (gain/offset, noise-floor drift) is removed from view by
+stages 1–2 and cannot be studied with this release. Any degradation the
+curve shows has already survived three independent, causal adaptive
+corrections — it cannot be attributed to scaling, gain, offset, or
+noise-floor drift.
 
 ---
 
 ## 7. Split design and rationale
 
 **Cut-point sweep, not one fixed cut.** Trained separately at sessions
-1–5, 1–10, 1–15, and 1–20, producing four drift curves. Two reasons: (1)
-**robustness** — if the curve's *shape* is stable across cuts, the result
-doesn't hinge on an arbitrary choice of "15"; if it isn't, that's itself a
-finding about sensitivity to calibration-set size; (2) **a question of its
-own** — PER at a fixed day-offset across the four cuts measures how much
-calibration data buys how much drift-resistance. **Tradeoff:** more
-training sessions → stronger baseline but a shorter, more recent held-out
-time axis (training through session 15 leaves +5 to +546 days; through
-session 30 would cut that to roughly +5 to +166, discarding the six 2025
-sessions). This is why the sweep stops at 1–20.
+1–5, 1–10, 1–15, and 1–20 (each losing session 1 to the corpus filter —
+100% 50-Word, zero Switchboard trials), producing four drift curves —
+tests whether the result depends on an arbitrary cut, and measures how
+much calibration data buys drift-resistance. More training sessions
+gives a stronger baseline but a shorter, more recent held-out axis,
+which is why the sweep stops at 1–20. Temporal, not random:
+extrapolation into the future, not interpolation within a shuffled pool.
+Bootstrap CIs are mandatory (early held-out sessions have as few as 80
+trials), and early-stopping data comes from WITHIN the training
+sessions, never held-out ones (`docs/FINDINGS.md`: "Cut-point sweep
+manifests built and validated; a 126-day coverage gap").
 
-- **Why temporal, not random.** The question is extrapolation into the
-  future, not interpolation within a shuffled pool — a randomly-held-out
-  session tells you nothing about a decoder that's aging.
-- **Bootstrap CIs are mandatory.** Early held-out sessions have as few as
-  80 trials; PER on 80 sentences is noisy enough to look like structure by
-  chance. Every point on every curve needs an interval.
-- **Floor effect risk.** The 1–15 training block is 3,969 labeled trials
-  (~17.6 hours of speech) — comparable to Willett et al. 2023's 16.8-hour
-  budget (23.8% WER, 125K-word vocabulary), so a usable decoder is
-  plausible. The 1–20 cut (more training data) serves as a check on
-  whether floor effects distort the 1–5/1–10 curves.
-- **Validation set rule.** Early-stopping/hyperparameter data must come
-  from WITHIN the training sessions, never from held-out sessions —
-  peeking at the drift curve to tune hyperparameters would fit the model
-  to the test data by the back door. Examined once, at the end, per
-  cut-point model. Session 16 is a valid validation source for the 1–15
-  cut but must never be used for the 1–5 cut's evaluation of session 16.
+| cut | train trials | active Switchboard sessions | held-out coverage |
+|---|---:|---:|---|
+| s05 | 908 | 4 | +2 to +597d |
+| s10 | 2,098 | 9 | +2 to +562d |
+| s15 | 3,150 | 14 | +5 to +546d |
+| s20 | 3,336 | 19 | +100 to +513d |
 
-**s15's 126-day coverage gap (days +7 to +133) is resolved: the region
-is a smooth ramp, not a collapse, and this is a direct payoff of the
-sweep design, not a workaround.** The gap itself (`docs/FINDINGS.md`:
-"Cut-point sweep manifests built and validated; a 126-day coverage gap")
-means s15 has no eval point between +7d and +133d. Under the settled
-architecture, s05's densely-sampled +2-to-+133d region shows PER **0.277
-at +2d, 0.370 at +9d, 0.490 at +30d, roughly 0.51–0.60 across +37 to
-+58d, 0.675 at +100d, 0.746 at +126d** — a smooth, continuous rise with
-no discontinuity (`docs/FINDINGS.md`: "The cut-point sweep:
-calibration-data advantage is front-loaded and fades by ~100 days");
-s10 corroborates independently with its own dense early sampling. **The
-apparent "step at the training boundary" in s15 was an artifact of
-having no data between +7 and +133 days, not evidence of a sudden
-transition.** This is precisely why the sweep runs at multiple cut
-points (this section's opening rationale) rather than committing to
-s15 alone: it existed to test whether the result depended on an
-arbitrary cut, and it resolved a shape s15 alone could not see.
+**The +2-to-+133-day region is a smooth, continuous ramp, not a step**
+— s05's densely-sampled early sessions show PER rising from 0.277 at
++2d to 0.746 at +126d with no discontinuity, corroborated independently
+by s10 (`docs/FINDINGS.md`: "The cut-point sweep: calibration-data
+advantage is front-loaded and fades by ~100 days").
 
-**Primary cut-point decision, recorded.** Applying the pre-committed
-selection rule (below) to all four trained cut points selects **s05**
-as the primary analysis, with **s15 reported alongside as a robustness
-check** (`docs/FINDINGS.md`: "Pre-committed cut-point selection rule"
-addendum, 2026-09-11, and "The cut-point sweep..."). The rule weighs
-only validation PER and curve resolution — it is silent on
-generalization to unseen sessions and training stability, both of which
-s05 scores worst on of the four cuts. It was followed rather than
-overridden because it was fixed before any of these values existed; see
-the FINDINGS addendum for the full reasoning.
+**Primary cut point: s05**, per the pre-committed rule (largest cut
+point with acceptable validation PER, preferring earlier cuts when
+comparable within 0.02 — `docs/FINDINGS.md`: "Pre-committed cut-point
+selection rule"). **s15 is reported alongside as a robustness check**:
+the rule is silent on generalization and training stability, both of
+which s05 scores worst on (same entry's addendum, and "The cut-point
+sweep...").
 
-**Corpus stratification.** Switchboard-only, both train and eval, is the
-**primary analysis** (`splits/temporal_s01_s*_switchboard.json`);
-all-corpora is a named fallback (`temporal_s01_s15_allcorpora.json`,
-1–15 only) if Switchboard-only proves too small. Pooling all corpora
-would conflate task-distribution shift with neural drift — the training
-block is ~87–88% Switchboard while at least 8 of 30 held-out sessions
-have **zero** Switchboard trials (`docs/FINDINGS.md`: "Corpus composition
-is a serious confound"). Cost: 3,501 Switchboard vs. 3,969 all-corpora
-trials at the 1–15 cut, **11.8% less training data**. The Switchboard
-1–15 block is effectively 14 sessions: session 1 is 100% 50-Word,
-contributing zero Switchboard trials (recorded per session in every
-manifest, cut DATE unaffected). The ≥50-labeled-Switchboard-trial
-viability threshold (`passes_threshold` in every manifest) was fixed
-before seeing any PER value.
-
-**Primary cut-point selection follows a rule fixed in advance of any PER
-value** — see `docs/FINDINGS.md`: "Pre-committed cut-point selection
-rule" for the exact rule and why recording it in advance matters.
-
-**Why the official split cannot measure drift, and why the pretrained
-checkpoint cannot be used for the drift curve:** see `docs/DATASET.md`
-sections 12–13 for the full mechanism (val/test are trial-level splits of
-the same held-out blocks, not independent; every session, including the
-most recent, contributes training data, so the official split shows
-near-zero drift by construction). The pretrained checkpoint was trained
-on all 45 sessions (`docs/FINDINGS.md`: "Block count decreases..."), so
-it has no held-out future — useful only for validating our evaluation
-code and for inspecting its learned per-session day-layers.
+**Corpus stratification: Switchboard-only** is the primary analysis;
+all-corpora is a fallback, since pooling would conflate task-distribution
+shift with neural drift — the training block is ~87–88% Switchboard
+while at least 8 of 30 held-out sessions have zero Switchboard trials
+(`docs/FINDINGS.md`: "Corpus composition is a serious training/eval
+confound"), an 11.8% training-data cost at s15; the ≥50-trial viability
+threshold was fixed before any PER value existed. The official split
+cannot measure drift for the same reason (`docs/DATASET.md` sections
+12–13): every session contributes training data, so it shows near-zero
+drift by construction; the pretrained checkpoint has no held-out future
+and is useful only for validating our evaluation code.
 
 ---
 
@@ -363,29 +233,20 @@ code and for inspecting its learned per-session day-layers.
   budget — the Dataset class reads lazily per `__getitem__`, never holds
   everything in memory.
 - **Length-bucketed batching** (`LengthBucketedSampler`,
-  `data/collate.py`). `n_time_steps` spans 138–2179+ bins (~7.4x within
-  one session, more across the dataset); random batching wastes most of
-  each batch on padding. Sorting before chunking cuts padding waste from
-  35.5% (random) to 13.7% (bucketed) at a 32-trial pool, batch_size 8.
-  Only batch ORDER is shuffled per epoch (with jitter so the same trials
-  aren't grouped identically every epoch) — batch CONTENTS are not
-  randomized. **Cost, accepted deliberately:** batches are non-i.i.d. in
-  sentence length (a narrow duration band per batch, not a uniform
-  sample) — standard practice in speech recognition, not a bug.
+  `data/collate.py`). `n_time_steps` spans 138–2179+ bins; random
+  batching wastes most of each batch on padding (35.5% vs. 13.7%
+  bucketed, at a 32-trial pool). Only batch ORDER is shuffled per epoch
+  — batch CONTENTS are not randomized. **Cost, accepted deliberately:**
+  batches are non-i.i.d. in sentence length — standard practice in
+  speech recognition, not a bug.
 - **DataLoader: `num_workers=2`, `persistent_workers=True`,
-  `pin_memory=True`.** Two rounds of synthetic benchmarking picked wrong
-  values that didn't survive contact with real data; only a real
-  measurement against the actual dataset settled it, and moving the
-  dataset to an SSD — not a `num_workers` change — is what actually
-  resolved the bottleneck (`docs/FINDINGS.md`: "Storage medium, not
-  DataLoader configuration, was the training bottleneck"). **Methodology
-  lesson:** a benchmark must reproduce the real access pattern (many
-  distinct files, real variable lengths, no page-cache reuse) or it
-  measures something else — an early benchmark reported ~1 ms/item on a
-  small, cache-resident single-session set; real training walks 3,150
-  distinct trials across 14 files and measured 70–93 ms/item on the
-  original spinning disk. Dataloader wait is now under 2% of epoch time
-  at `num_workers >= 1`; GPU compute is the dominant cost.
+  `pin_memory=True`.** Settled by a real measurement against the actual
+  dataset on SSD storage, not synthetic benchmarking — a benchmark must
+  reproduce the real access pattern (many distinct files, real variable
+  lengths, no page-cache reuse) or it measures something else
+  (`docs/FINDINGS.md`: "Storage medium, not DataLoader configuration, was
+  the training bottleneck"). Dataloader wait is under 2% of epoch time at
+  `num_workers >= 1`; GPU compute is the dominant cost.
 - **Normalization is already applied upstream** — a rolling per-channel,
   per-sentence window, NOT per-block/session/global
   (`docs/DATASET.md` section 9 item 7). `data/normalize.py` must not
@@ -393,70 +254,52 @@ code and for inspecting its learned per-session day-layers.
   already normalized by a mechanism outside our control.
 - **GPU budget is not a constraint on model size.** The full baseline
   architecture (5 layers, 1024 hidden) trains with no OOM risk even at
-  batch=64 (`docs/FINDINGS.md`: "GPU compute is not a constraint");
-  real-training peak VRAM for the actual small/default config is 1.75 GB
-  (`docs/FINDINGS.md`: "Storage medium, not DataLoader configuration...").
-  No need to shrink the model to
-  fit a GPU memory budget.
+  batch=64; real-training peak VRAM for the actual small/default config
+  is 1.75 GB (`docs/FINDINGS.md`: "GPU compute is not a constraint",
+  "Storage medium, not DataLoader configuration..."). No need to shrink
+  the model to fit a GPU memory budget.
 - **PER is independent of batch composition.** `GRUCTC.forward` zeros
   every padded timestep immediately after `DayLayers` and before the
-  smoothing convolution; `input_lengths` is a mandatory forward argument.
-  Fixed 2026-09-04 after a real bug was found and measured — see
-  `docs/FINDINGS.md`: "Batch composition changed decoded output" for the
-  mechanism and the before/after numbers.
+  smoothing convolution; `input_lengths` is a mandatory forward argument
+  (`docs/FINDINGS.md`: "Batch composition changed decoded output").
 
 ---
 
 ## 9. Metrics
 
-**PER (phoneme error rate) is primary.** Measures the neural decoder in
+**PER (phoneme error rate) is primary** — measures the neural decoder in
 isolation, directly from `seq_class_ids`, with no downstream language
-model in the loop.
-
-**WER is out of reach on this machine — a stated limitation, not silently
-skipped.** The published pipeline's LM stage needs ~60 GB RAM (3-gram,
-300 GB for 5-gram) and ~12.4 GB VRAM for OPT-6.7B rescoring
-(`docs/DATASET.md` section 15). On a 16 GB Windows machine, PER is
-achievable and WER is not, short of a heavily pruned n-gram or a rented
-large-memory instance.
+model in the loop. **WER is out of reach on this machine:** the LM
+stage's resource requirements exceed a 16 GB Windows machine
+(`docs/DATASET.md` section 15) — PER is achievable, WER is not, short of
+a heavily pruned n-gram or a rented large-memory instance.
 
 **Silence is scored, not excluded.** CTC blanks are removed and
 consecutive repeats collapsed per standard decoding, but the silence
 token (class 40) is scored as a regular token in the Levenshtein
-alignment — the field convention for this dataset lineage. **Why:**
-silence marks word boundaries; a decoder that gets every phoneme right
-but misplaces silence produces text a downstream LM can't use for word
-segmentation, so excluding silence from PER would flatter the decoder
-beyond what it can actually support. **Visualization caveat only, not a
-PER change:** silence is ~25% of tokens and will dominate any confusion
-matrix at a shared scale — plot it separately or normalize per row.
+alignment — the field convention. Silence marks word boundaries; a
+decoder that gets every phoneme right but misplaces silence produces
+text a downstream LM can't use for word segmentation, so excluding it
+would flatter the decoder beyond what it can support. Silence is ~25% of
+tokens and will dominate any confusion matrix at a shared scale — plot
+it separately or normalize per row.
 
 **`effective_signal` is a reported metric alongside PER, not a
 replacement for it.** `effective_signal = PER_shuffled − PER_real`,
 where `PER_shuffled` replaces each trial's `input_features` with a
 length-compatible donor trial's from the SAME session (targets
-unchanged) — `scripts/03_evaluate.py --shuffled-control`,
-`b2t_drift.evaluation.shuffled_control`. **Why raw PER cannot do this
-job alone:** a degenerate, non-functional decoder does not score 1.0 on
-this task — the empty-hypothesis ceiling is exactly 1.000 (confirmed),
-but a constant-silence hypothesis already scores 0.962–0.966
-(`docs/FINDINGS.md`: "The effective-signal control"), and greedy CTC
-decoding on genuinely uninformative input tends to land near there too
-— so a real PER of ~0.85–0.90 is consistent with EITHER "still degrading
-gracefully" or "already extracting nothing," and raw PER alone cannot
-tell the two apart. `effective_signal` can: it is the PER gap between
-the model's real decode and its decode of scrambled input for the SAME
-session, i.e. how much the model gains from receiving genuine neural
-data. Under the architecture in use when this metric was introduced, it
-fell to near-zero by +453d (`docs/FINDINGS.md`: "The effective-signal
-control", now superseded); under the settled architecture (section 10)
-it instead stays clear of zero across the full observed range
-(`docs/FINDINGS.md`: "Effective signal does not collapse under the
-settled architecture") — exactly the distinction this metric exists to
-draw, and a demonstration that it tracks the DECODER's actual use of
-neural information rather than a fixed property of the data. Report it
-alongside every drift-curve PER value from a cut point onward, not only
-at the two endpoints.
+unchanged) — `scripts/03_evaluate.py --shuffled-control`. **Why raw PER
+cannot do this job alone:** a degenerate, non-functional decoder does
+not score 1.0 on this task — the empty-hypothesis ceiling is exactly
+1.000, but a constant-silence hypothesis already scores 0.962–0.966, so
+a real PER of ~0.85–0.90 is consistent with EITHER "still degrading
+gracefully" or "already extracting nothing." `effective_signal`
+distinguishes them: the PER gap between the model's real decode and its
+decode of scrambled input for the SAME session. It is CI-separated from
+zero across nearly the full observed range under the settled
+architecture (`docs/FINDINGS.md`: "Effective signal does not collapse
+under the settled architecture"). Report it alongside every drift-curve
+PER value from a cut point onward, not only at the two endpoints.
 
 ---
 
@@ -479,11 +322,11 @@ literature), `judgment call` (reasonable given constraints, not derived),
 | `n_classes` | 41 | — | CTC blank (0) + 39 ARPABET phonemes (1–39) + silence (40); verified against `seq_class_ids`. | fixed by data |
 | `input_dropout` | 0.0 | — | Off by default; channel dropout simulating electrode failure is a later ablation, not a training default — enabling it now would confound the baseline. | judgment call |
 | `n_features` | 512 | — | 256 threshold-crossing + 256 spike-band-power channels at 20 ms bins; not tunable. | fixed by data |
-| `patch_size` | 14 | 14 (7,168-dim GRU input) | Concatenate 14 consecutive 20 ms bins into one GRU input vector, matching the published pipeline. `unfold`-based, applied after smoothing, before the GRU (`tests/test_patching.py`); `ctc_input_lengths` divides lengths to the patched axis before `nn.CTCLoss` (`CLAUDE.md`'s "known pitfalls"), verified against every s15 train+val trial. Round-5 s15 comparison: patching cut val PER from the ~0.196–0.200 no-patch plateau to ~0.169–0.170 (`docs/FINDINGS.md`: "Day layers are unstable when trained jointly across many sessions"). `1` (no-op) remains available for an ablation. | principled |
+| `patch_size` | 14 | 14 (7,168-dim GRU input) | Concatenate 14 consecutive 20 ms bins into one GRU input vector, matching the published pipeline. `unfold`-based, applied after smoothing, before the GRU (`tests/test_patching.py`); `ctc_input_lengths` divides lengths to the patched axis before `nn.CTCLoss` (`CLAUDE.md`'s "known pitfalls"), verified against every s15 train+val trial. Patching cuts val PER from the ~0.196–0.200 no-patch plateau to ~0.169–0.170 (`docs/FINDINGS.md`: "Day layers are unstable when trained jointly across many sessions"). `1` (no-op) remains available for an ablation. | principled |
 | `patch_stride` | 4 | 4 | Step the 14-bin window every 4 bins (80 ms output stride — the published real-time phoneme rate). Paired with `patch_size`; both read from `self`, so `_patch` and `ctc_input_lengths` cannot disagree. | principled |
 | `day_layer_parameterization` | `"diagonal"` | `"full"` (512×512 per session) | Per-channel gain+offset only, 1,024 params/session vs. `"full"`'s 262,656. `"full"` **diverges** when all 45 session slices train jointly, even at `day_layer_penalty=3000` (`docs/FINDINGS.md`: "Day layers are unstable when trained jointly across many sessions"); `"diagonal"` is stable and reached full PER parity with the no-day-layer config on s15, with slices staying within `max|W−I| ≈ 0.04` of identity after 150 epochs. It is also the parameterization Arm 2 (`docs/DESIGN.md` section 5) can realistically fit from 10–50 labelled sentences. `"lowrank"` remains implemented and untested. | judgment call — `"full"` matches the published checkpoint but is unworkable jointly at this scale |
 | `day_layer_penalty` (λ) | 300.0 | n/a (published checkpoint's day layers are unregularized) | Weight on `DayLayers.identity_penalty()`, added to the CTC loss. The penalty is **Ridge-style in form** (a squared Frobenius norm of the per-session weight deviation plus a squared-L2 bias term) **but its shrinkage target is the identity matrix `I`, not `0`** — pulling a day layer's weight toward `0` would annihilate its input (`y = x·0 + b`), whereas the no-op transform is `W = I, b = 0`. A plain `weight_decay=1e-4` diagnostic on Model A barely helped for exactly this reason: it regularized toward the wrong point. `λ=300` was measured (not guessed) to contribute ~0.11% / 3.05% / 7.89% of total loss at epochs 1 / 5 / 10 on real s15 data — an anchor, not a dominator; `λ=3000` reaches 46% by epoch 10 and starved the CTC objective (`docs/FINDINGS.md`: "Choosing the identity-anchored day-layer penalty's lambda", "Day layers are unstable…"). With `"diagonal"` the penalty is only lightly load-bearing (slices stay near identity on their own) but is kept for the cut-point sweep's smaller train sets. | judgment call — λ measured against real runs |
-| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). **KEPT by the pre-registered keep/drop rule (`docs/FINDINGS.md`: "Pre-committed rule for keeping or dropping day layers"):** the round-5 s15 comparison's best day-layer config (`"diagonal"`, λ300, patched) reached val PER 0.16932 vs. 0.1697 for the best no-day-layer config — a −0.0004 gap, far inside the rule's 0.03 band (≈3× checkpoint-selection noise). Round-4's apparent no-day-layer advantage was an artifact of comparing an unconverged run against `"full"` day layers; with `"diagonal"` and 150 epochs the mechanism costs nothing. Question 3's Arm 2 mechanism depends on it staying available (section 5's revised framing); the day-0 gap it costs nothing against is now measured at ~0, not the +0.313 figure this decision was originally weighed against. | principled |
+| `use_day_layers` | True, identity init | Confirmed from pretrained checkpoint (`docs/FINDINGS.md`) | A session with no trained layer falls back to a no-op, not a random projection — makes "how much calibration data does a new day need" well-posed (zero data = identity transform). **KEPT by the pre-registered keep/drop rule** (`docs/FINDINGS.md`: "Pre-committed rule for keeping or dropping day layers"): the best day-layer config (`"diagonal"`, λ300, patched) reached val PER 0.16932 vs. 0.1697 for the best no-day-layer config — a −0.0004 gap, inside the rule's 0.03 band. Question 3's Arm 2 mechanism depends on it staying available (section 5). | principled |
 
 **Memory cost of `DayLayers`.** Dense `(n_sessions, n_features,
 n_features)` float32 — 45×512×512×4 bytes ≈ 47 MB, a large fraction of
@@ -502,59 +345,44 @@ optimizer's first step, or use a fresh optimizer for that phase.
 
 ## 11. Stated limitations
 
-- **Single participant.** Everything here is one person's brain. Nothing
+- **Single participant.** Everything here is one person's brain; nothing
   generalizes across subjects.
 - **All results offline.** Closed-loop performance differs — the
-  participant adapts to the decoder's behavior in real use, and nothing
-  here captures that adaptation.
+  participant adapts to the decoder's behavior in real use, uncaptured
+  here.
 - **Speaking strategy is unrecoverable.** Some blocks are vocalized, some
-  silent speech; the authors don't publish which, so it can't be
-  controlled for.
+  silent speech; the split isn't released, so it can't be controlled for.
 - **Test partitions are unlabeled.** 1,450 trials (13%) are unusable for
   supervised work.
-- **Normalization is sentence-indexed, not time-indexed.** Sessions with
+- **Normalization is sentence-indexed, not time-indexed.** Sessions at
   the same day-offset don't necessarily have the same number of
-  normalization-window updates (median ~42 trials/block,
-  `docs/FINDINGS.md`). Check whether per-session PER correlates with
-  session trial count before attributing an effect to elapsed time.
+  normalization-window updates (median ~42 trials/block); check whether
+  per-session PER correlates with session trial count before attributing
+  an effect to elapsed time.
 - **The first ~20 sentences of each session are normalized on a
-  still-filling window** and are noisier as a result. Elevated PER there
-  is expected to be a normalization artifact, not drift — see section 12
-  for the resulting warm-up-trials decision.
+  still-filling window** and are noisier as a result — expected to be a
+  normalization artifact, not drift (section 12's warm-up-trials
+  decision).
 - **ALS progression may change what the participant can attempt to
-  articulate, independent of electrode health — indistinguishable from
-  electrode degradation in this dataset.** Neither this dataset nor this
-  project's design can resolve that ambiguity; state it alongside any
+  articulate, independent of electrode health** — indistinguishable from
+  electrode degradation in this dataset. State it alongside any
   drift-curve result.
-- **Best-epoch selection carries roughly ±0.01 PER of noise.** Measured on
-  the s15 100-epoch diagnostic run: `std(val_per)` over the last 20 epochs
-  is 0.0091, and the selected best epoch (92, PER 0.353) differs from the
-  final epoch (99, PER 0.371) by 0.018 — about two standard deviations of
-  that noise (`docs/FINDINGS.md`: "Pre-committed cut-point selection
-  rule" addendum). **Differences below about 0.02 between cut points
-  should not be treated as meaningful** — that gap is comparable to
-  checkpoint-selection noise alone, before any real difference between
-  cuts is considered.
+- **Best-epoch selection carries roughly ±0.01 PER of noise**
+  (`docs/FINDINGS.md`: "Pre-committed cut-point selection rule"
+  addendum). **Differences below about 0.02 between cut points should
+  not be treated as meaningful.**
 - **Sentence length correlates with session date; Switchboard-only
-  reduces but does not eliminate this confound.** Session level (n=45):
-  Pearson r=0.27 (p=0.074, n.s.) but Spearman ρ=0.47 (p=0.0012) — driven
-  by several much-shorter 50-Word-corpus sessions scattered
-  non-monotonically through the timeline (train median seq_len 26.0 vs.
-  28.25 for the 30 held-out sessions). Trial level, Switchboard only
-  (n=6,491): still a significant, weak upward trend (r=0.137,
-  p=1.3e-28). **Verdict: mild-to-moderate, not eliminated by
-  Switchboard-only alone** — report per-session median seq_len alongside
-  PER on every drift curve (`figures/sentence_length_over_time.png`).
+  reduces but does not eliminate this confound** (trial-level r=0.137,
+  p=1.3e-28). Report per-session median seq_len alongside PER on every
+  drift curve (`figures/sentence_length_over_time.png`).
 
 ---
 
 ## 12. Decisions fixed in advance
 
-A standing record of decisions made — and recorded here — before the
-evidence that could have biased them: before any implementation in
-`src/b2t_drift/data`/`models`/`training`, and (for anything touching
-evaluation) before looking at any PER value, per section 7's validation
-rule.
+A standing record of decisions made before the evidence that could have
+biased them: before any implementation, and (for evaluation) before
+looking at any PER value, per section 7's validation rule.
 
 **Warm-up trials: DECIDED — keep all trials, exclude none.**
 

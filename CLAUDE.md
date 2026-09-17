@@ -39,7 +39,13 @@ Guidance for working in this repository.
 
 `docs/DESIGN.md` holds durable decisions and their justifications. It
 states what is true now and why, with no chronology. Target length is
-under 400 lines; if it exceeds that, content belongs elsewhere.
+under 400 lines; if it exceeds that, content belongs elsewhere. When a
+decision changes, replace the old text with the new decision and its
+measured justification, plus a one-line pointer to the FINDINGS.md entry
+recording the change. Do not narrate the revision here. DESIGN.md states
+what is true now; FINDINGS.md is the append-only record of how it came
+to be true. If DESIGN.md exceeds 400 lines, the excess is almost always
+revision narrative that belongs in FINDINGS.md.
 
 `docs/FINDINGS.md` holds the dated empirical record — investigations,
 measurements, and what each changed. Append-only. Entries are titled by
