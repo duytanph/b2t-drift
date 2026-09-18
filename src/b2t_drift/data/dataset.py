@@ -27,6 +27,21 @@ from torch.utils.data import Dataset
 
 from b2t_drift.data.hdf5_io import TrialId, read_trial
 
+N_TX_CHANNELS = 256
+N_TOTAL_FEATURES = 512
+
+# Named feature-column subsets, for the TX-only / SBP-only decoder comparison
+# (docs/DESIGN.md section 6's SNR-loss attribution -- TX reports zero once
+# spike amplitude falls below threshold, SBP still registers reduced energy;
+# `docs/DATASET.md` section 7's column layout: 0-255 TX, 256-511 SBP, column
+# i and i+256 the SAME physical electrode). `None` means "all 512, no
+# subsetting" -- the existing, unchanged default behavior.
+FEATURE_SUBSETS: dict[str, slice | None] = {
+    "all": None,
+    "tx": slice(0, N_TX_CHANNELS),
+    "sbp": slice(N_TX_CHANNELS, N_TOTAL_FEATURES),
+}
+
 
 class TrialDataset(Dataset):
     """One torch Dataset item per trial, backed by `hdf5_io.read_trial`.
@@ -42,6 +57,7 @@ class TrialDataset(Dataset):
         trial_ids: Sequence[TrialId],
         session_to_index: Mapping[str, int],
         validate: bool = False,
+        feature_subset: slice | None = None,
     ) -> None:
         """Build the dataset from an explicit list of trials.
 
@@ -69,6 +85,13 @@ class TrialDataset(Dataset):
                 every `__getitem__` call. Defaults to False, matching
                 `read_trial`'s own hot-path default; set True for a
                 one-time correctness pass, not routine training.
+            feature_subset: If given, `__getitem__` slices `features`'
+                column axis by this (e.g. `FEATURE_SUBSETS["tx"]` for
+                columns 0-255) before returning it -- `None` (the
+                default) returns all 512 columns unchanged. Applied AFTER
+                `hdf5_io.read_trial`'s own full-width validation (when
+                `validate=True`), so a subsetted dataset still benefits
+                from that check against the real, unsliced array.
 
         Raises:
             ValueError: If any `trial_id.session_id` in `trial_ids` is
@@ -102,6 +125,7 @@ class TrialDataset(Dataset):
         self.trial_ids = tuple(trial_ids)
         self.session_to_index = session_to_index
         self.validate = validate
+        self.feature_subset = feature_subset
 
     def __len__(self) -> int:
         """Number of trials this dataset serves."""
@@ -147,8 +171,12 @@ class TrialDataset(Dataset):
         trial_id = self.trial_ids[idx]
         features, targets = read_trial(self.data_root, trial_id, validate=self.validate)
 
+        features_tensor = torch.from_numpy(features).float()
+        if self.feature_subset is not None:
+            features_tensor = features_tensor[:, self.feature_subset]
+
         return {
-            "features": torch.from_numpy(features).float(),
+            "features": features_tensor,
             "targets": torch.from_numpy(targets).long(),
             "n_time_steps": trial_id.n_time_steps,
             "seq_len": trial_id.seq_len,

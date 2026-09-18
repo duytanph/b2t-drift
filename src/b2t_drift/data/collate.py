@@ -40,7 +40,7 @@ from torch.utils.data import Sampler
 
 from b2t_drift.data.hdf5_io import TrialId
 
-N_FEATURES = 512
+N_FEATURES = 512  # the FULL width; see "feature width is read from the batch" below
 MIN_TARGET_VALUE = 1
 MAX_TARGET_VALUE = 40
 
@@ -120,7 +120,14 @@ def collate_trials(items: Sequence[dict]) -> dict:
                     f"min={min_val}, max={max_val}."
                 )
 
-    features = torch.zeros((batch_size, max_time, N_FEATURES), dtype=torch.float32)
+    # Feature width is read from the batch itself, not hardcoded to
+    # N_FEATURES=512 -- TrialDataset's optional feature_subset (e.g. the
+    # TX-only/SBP-only 256-column slices, data/dataset.py's
+    # FEATURE_SUBSETS) narrows "features" before it ever reaches this
+    # function, and this function has no business assuming a width its
+    # caller already chose.
+    n_features = items[0]["features"].shape[-1]
+    features = torch.zeros((batch_size, max_time, n_features), dtype=torch.float32)
     input_lengths = torch.empty(batch_size, dtype=torch.int64)
     target_lengths = torch.empty(batch_size, dtype=torch.int64)
     session_indices = torch.empty(batch_size, dtype=torch.int64)

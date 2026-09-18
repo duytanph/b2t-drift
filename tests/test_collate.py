@@ -21,10 +21,11 @@ def make_item(
     block_num: int = 1,
     trial_key: str = "trial_0000",
     target_seed: int = 0,
+    n_features: int = 512,
 ) -> dict:
     """Build one synthetic TrialDataset.__getitem__-shaped item."""
     generator = torch.Generator().manual_seed(target_seed)
-    features = torch.randn(n_time_steps, 512, generator=generator)
+    features = torch.randn(n_time_steps, n_features, generator=generator)
     targets = torch.randint(1, 41, (seq_len,), generator=generator, dtype=torch.int64)
     return {
         "features": features,
@@ -75,6 +76,18 @@ def test_batch_shapes_correct_for_mixed_length_batch() -> None:
     assert len(batch["session_ids"]) == 4
     assert len(batch["block_nums"]) == 4
     assert len(batch["trial_keys"]) == 4
+
+
+def test_batch_feature_width_follows_items_not_hardcoded_512() -> None:
+    """collate_trials must support a narrower feature width (e.g. the
+    TX-only/SBP-only 256-column TrialDataset.feature_subset) rather than
+    always allocating a 512-wide tensor."""
+    narrow_batch = [
+        make_item(n_time_steps=50, seq_len=5, trial_key="trial_a", n_features=256),
+        make_item(n_time_steps=80, seq_len=8, trial_key="trial_b", n_features=256),
+    ]
+    batch = collate_trials(narrow_batch)
+    assert batch["features"].shape == (2, 80, 256)
 
 
 def test_features_padded_region_is_exactly_zero() -> None:

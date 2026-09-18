@@ -11,7 +11,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from b2t_drift.data.dataset import TrialDataset
+from b2t_drift.data.dataset import FEATURE_SUBSETS, TrialDataset
 from b2t_drift.data.hdf5_io import iter_trial_ids
 
 DATA_ROOT = Path("data/raw/hdf5_data_final")
@@ -75,6 +75,30 @@ def test_features_shape_and_dtype_match_trial_id(trial_ids, session_to_index) ->
         item = dataset[idx]
         assert item["features"].dtype == torch.float32
         assert item["features"].shape == (trial_id.n_time_steps, 512)
+
+
+def test_feature_subset_tx_selects_first_256_columns(trial_ids, session_to_index) -> None:
+    full = TrialDataset(DATA_ROOT, trial_ids, session_to_index)
+    tx_only = TrialDataset(DATA_ROOT, trial_ids, session_to_index, feature_subset=FEATURE_SUBSETS["tx"])
+    for idx in range(len(trial_ids)):
+        full_item = full[idx]
+        tx_item = tx_only[idx]
+        assert tx_item["features"].shape == (full_item["features"].shape[0], 256)
+        assert torch.equal(tx_item["features"], full_item["features"][:, :256])
+
+
+def test_feature_subset_sbp_selects_last_256_columns(trial_ids, session_to_index) -> None:
+    full = TrialDataset(DATA_ROOT, trial_ids, session_to_index)
+    sbp_only = TrialDataset(DATA_ROOT, trial_ids, session_to_index, feature_subset=FEATURE_SUBSETS["sbp"])
+    for idx in range(len(trial_ids)):
+        full_item = full[idx]
+        sbp_item = sbp_only[idx]
+        assert sbp_item["features"].shape == (full_item["features"].shape[0], 256)
+        assert torch.equal(sbp_item["features"], full_item["features"][:, 256:])
+
+
+def test_feature_subset_all_is_a_no_op() -> None:
+    assert FEATURE_SUBSETS["all"] is None
 
 
 def test_targets_shape_and_dtype_match_trial_id(trial_ids, session_to_index) -> None:

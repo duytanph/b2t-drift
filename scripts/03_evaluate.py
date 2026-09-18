@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 
 from b2t_drift.config import load_yaml
 from b2t_drift.data.collate import collate_trials
-from b2t_drift.data.dataset import TrialDataset
+from b2t_drift.data.dataset import FEATURE_SUBSETS, N_TX_CHANNELS, TrialDataset
 from b2t_drift.data.splits import load_split, split_to_trial_ids
 from b2t_drift.evaluation.edit_distance import EditCounts
 from b2t_drift.evaluation.metrics import bootstrap_paired_difference_ci, per_session_metrics
@@ -66,10 +66,14 @@ def _build_model(model_config: dict, n_sessions: int) -> GRUCTC:
     # Every key that changes the module's shape or its state_dict layout
     # must be threaded through, or load_checkpoint fails: patch_size
     # changes the GRU's input_size, day_layer_parameterization changes
-    # which per-session tensors DayLayers owns (scale vs. weights). The
-    # `.get(...)` defaults match GRUCTC's own and scripts/02_train.py, so
-    # checkpoints written before these keys existed still load.
-    return GRUCTC(
+    # which per-session tensors DayLayers owns (scale vs. weights),
+    # feature_subset changes n_features (256 for a TX-only/SBP-only run,
+    # scripts/02_train.py's --feature-subset). The `.get(...)` defaults
+    # match GRUCTC's own and scripts/02_train.py, so checkpoints written
+    # before these keys existed still load.
+    feature_subset_name = model_config.get("feature_subset", "all")
+    n_features = N_TX_CHANNELS if feature_subset_name != "all" else None
+    kwargs = dict(
         n_sessions=n_sessions,
         hidden_size=model_config["hidden_size"],
         n_layers=model_config["n_layers"],
@@ -83,6 +87,9 @@ def _build_model(model_config: dict, n_sessions: int) -> GRUCTC:
         day_layer_parameterization=model_config.get("day_layer_parameterization", "full"),
         day_layer_rank=model_config.get("day_layer_rank", 16),
     )
+    if n_features is not None:
+        kwargs["n_features"] = n_features
+    return GRUCTC(**kwargs)
 
 
 def main() -> None:
@@ -149,6 +156,7 @@ def main() -> None:
     load_checkpoint(args.checkpoint, model, map_location=str(device))
     model.to(device)
     criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
+    feature_subset = FEATURE_SUBSETS[model_config.get("feature_subset", "all")]
 
     eval_sessions = split["eval_sessions"]
     if args.passing_only:
@@ -166,7 +174,7 @@ def main() -> None:
             continue
 
         trial_ids = split_to_trial_ids(split, data_root, session_id)
-        dataset = TrialDataset(data_root, trial_ids, session_to_index)
+        dataset = TrialDataset(data_root, trial_ids, session_to_index, feature_subset=feature_subset)
         dataloader = DataLoader(
             dataset, batch_size=BATCH_SIZE, collate_fn=collate_trials, num_workers=NUM_WORKERS,
         )
@@ -207,6 +215,7 @@ def main() -> None:
             shuffled_batches, n_rejected = build_shuffled_batches(
                 trial_ids, data_root, session_to_index, BATCH_SIZE, seed=SHUFFLED_CONTROL_SEED,
                 patch_size=model.patch_size, patch_stride=model.patch_stride,
+                feature_subset=feature_subset,
             )
             shuffled_result = evaluate(
                 model, shuffled_batches, criterion, device, blank_index=BLANK_INDEX, compute_per=True,

@@ -30,6 +30,7 @@ def build_shuffled_batches(
     seed: int = 0,
     patch_size: int = 1,
     patch_stride: int = 1,
+    feature_subset: slice | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Build batches with each trial's features swapped for a donor's.
 
@@ -72,6 +73,14 @@ def build_shuffled_batches(
             whenever the model downsamples the time axis, or a donor long
             enough raw but too short once patched slips through and
             inflates that session's shuffled PER.
+        feature_subset: If given (e.g. `data.dataset.FEATURE_SUBSETS["tx"]`),
+            slice both the donor's and (implicitly, via the same column
+            range) the evaluated model's expected feature width down to
+            this subset -- must match whatever `feature_subset` the
+            evaluated model's `TrialDataset` was built with, or the
+            shuffled control silently feeds the model a different feature
+            set than its real-data evaluation used. `None` (the default):
+            all 512 columns, unchanged behavior.
 
     Returns:
         `(batches, n_rejected)`: `batches` is a list of `collate_trials`
@@ -103,8 +112,12 @@ def build_shuffled_batches(
         donor_features, _ = read_trial(data_root, donor, validate=False)
         _, orig_targets = read_trial(data_root, t, validate=False)
 
+        donor_features_tensor = torch.from_numpy(donor_features).float()
+        if feature_subset is not None:
+            donor_features_tensor = donor_features_tensor[:, feature_subset]
+
         items.append({
-            "features": torch.from_numpy(donor_features).float(),
+            "features": donor_features_tensor,
             "targets": torch.from_numpy(orig_targets).long(),
             "n_time_steps": donor.n_time_steps,
             "seq_len": t.seq_len,

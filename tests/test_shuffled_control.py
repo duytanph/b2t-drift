@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from b2t_drift.data.dataset import FEATURE_SUBSETS
 from b2t_drift.data.hdf5_io import iter_trial_ids
 from b2t_drift.evaluation.shuffled_control import build_shuffled_batches
 
@@ -72,6 +73,20 @@ def test_donor_never_shorter_than_trials_seq_len() -> None:
     for batch in batches:
         for i, trial_key in enumerate(batch["trial_keys"]):
             assert int(batch["input_lengths"][i]) >= seq_len_by_key[trial_key]
+
+
+def test_feature_subset_narrows_donor_features() -> None:
+    _require_real_data()
+    trial_ids = list(iter_trial_ids(DATA_ROOT, SESSION_ID))[:8]
+    session_to_index = {SESSION_ID: 0}
+
+    batches, n_rejected = build_shuffled_batches(
+        trial_ids, DATA_ROOT, session_to_index, batch_size=8,
+        feature_subset=FEATURE_SUBSETS["tx"],
+    )
+    assert n_rejected < len(trial_ids), "test setup too small to be meaningful"
+    for batch in batches:
+        assert batch["features"].shape[-1] == 256
 
 
 def test_donor_length_check_accounts_for_patching() -> None:

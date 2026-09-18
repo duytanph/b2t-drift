@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 
 from b2t_drift.config import load_yaml
 from b2t_drift.data.collate import LengthBucketedSampler, collate_trials
-from b2t_drift.data.dataset import TrialDataset
+from b2t_drift.data.dataset import FEATURE_SUBSETS, N_TX_CHANNELS, TrialDataset
 from b2t_drift.data.splits import load_split, split_to_trial_ids
 from b2t_drift.models.gru_ctc import GRUCTC
 from b2t_drift.phonemes import BLANK_INDEX
@@ -86,6 +86,43 @@ def _apply_epoch_overrides(
     return max_epochs, patience, training_config_for_resolved
 
 
+def _model_kwargs(model_config: dict, n_sessions: int, n_features: int | None) -> dict:
+    """`GRUCTC` constructor kwargs shared between the real model and the
+    post-training reload sanity check, so the two can never silently drift
+    apart (they used to be two separately-written, identical-looking
+    `GRUCTC(...)` calls).
+
+    Args:
+        model_config: An experiment config's `model` section (or the
+            `resolved_model_config` copy of it that also carries
+            `feature_subset` -- unused here, read by callers instead).
+        n_sessions: Day-layer slice count.
+        n_features: Override for `GRUCTC`'s `n_features` (e.g. 256 for a
+            TX-only/SBP-only run), or `None` to use `GRUCTC`'s own default
+            (512, full feature width).
+
+    Returns:
+        A kwargs dict ready for `GRUCTC(**kwargs)`.
+    """
+    kwargs = dict(
+        n_sessions=n_sessions,
+        hidden_size=model_config["hidden_size"],
+        n_layers=model_config["n_layers"],
+        dropout=model_config["dropout"],
+        bidirectional=model_config["bidirectional"],
+        use_day_layers=model_config["use_day_layers"],
+        input_dropout=model_config["input_dropout"],
+        smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
+        patch_size=model_config.get("patch_size", 1),
+        patch_stride=model_config.get("patch_stride", 1),
+        day_layer_parameterization=model_config.get("day_layer_parameterization", "full"),
+        day_layer_rank=model_config.get("day_layer_rank", 16),
+    )
+    if n_features is not None:
+        kwargs["n_features"] = n_features
+    return kwargs
+
+
 def _build_run_name(split_name: str, given: str | None) -> str:
     """`{date}_{split-name}_{githash}` unless a name was given explicitly."""
     if given:
@@ -104,10 +141,16 @@ def _build_dataloader(
     limit: int | None,
     drop_last: bool,
     pin_memory: bool,
+    feature_subset: slice | None = None,
 ) -> tuple[DataLoader, LengthBucketedSampler]:
     """One `DataLoader` + its `LengthBucketedSampler`, for `partition`
     ("train" or "val") of `split`. `limit` truncates the trial list to
     its first `limit` entries -- used only by `--smoke`.
+
+    `feature_subset`: passed straight through to `TrialDataset` (e.g.
+    `FEATURE_SUBSETS["tx"]` for the TX-only/SBP-only decoder comparison,
+    `docs/DESIGN.md` section 6) -- `None` (the default) is the existing,
+    unchanged all-512-columns behavior.
 
     `num_workers=0` is a documented, decided-against configuration for
     real training or evaluation runs (`docs/DESIGN.md` section 8,
@@ -124,7 +167,7 @@ def _build_dataloader(
     if limit is not None:
         trial_ids = trial_ids[:limit]
 
-    dataset = TrialDataset(data_root, trial_ids, session_to_index)
+    dataset = TrialDataset(data_root, trial_ids, session_to_index, feature_subset=feature_subset)
     sampler = LengthBucketedSampler(trial_ids, batch_size=batch_size, drop_last=drop_last)
     dataloader = DataLoader(
         dataset, batch_sampler=sampler, collate_fn=collate_trials, num_workers=n_workers,
@@ -175,6 +218,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--feature-subset", type=str, default="all", choices=tuple(FEATURE_SUBSETS),
+        help=(
+            "Restrict input features to a named column subset: 'tx' (columns "
+            "0-255), 'sbp' (256-511), or 'all' (default, unchanged 512-dim "
+            "behavior). Splits by FEATURE TYPE, not by electrode -- column i "
+            "(TX) and i+256 (SBP) are the same physical electrode "
+            "(docs/DATASET.md section 7)."
+        ),
+    )
+    parser.add_argument(
         "--patience", type=int, default=None,
         help=(
             "Override training.patience from the config. Applied AFTER "
@@ -214,35 +267,30 @@ def main() -> None:
         training_config, max_epochs, patience, args,
     )
 
+    feature_subset = FEATURE_SUBSETS[args.feature_subset]
+    n_features = N_TX_CHANNELS if feature_subset is not None else None  # both "tx"/"sbp" are 256-wide
+    # A copy, not a mutation of exp_config["model"]: this is what gets saved
+    # into every checkpoint (via resolved_config below) so 03_evaluate.py
+    # can reconstruct the SAME feature subset a checkpoint was trained
+    # with, without the caller needing to pass --feature-subset again.
+    resolved_model_config = {**model_config, "feature_subset": args.feature_subset}
+
     pin_memory = torch.cuda.is_available()
     train_loader, train_sampler = _build_dataloader(
         data_root, split, "train", session_to_index,
         batch_size=training_config["batch_size"], n_workers=training_config["num_workers"],
-        limit=train_limit, drop_last=True, pin_memory=pin_memory,
+        limit=train_limit, drop_last=True, pin_memory=pin_memory, feature_subset=feature_subset,
     )
     val_loader, _ = _build_dataloader(
         data_root, split, "val", session_to_index,
         batch_size=training_config["batch_size"], n_workers=training_config["num_workers"],
-        limit=val_limit, drop_last=False, pin_memory=pin_memory,
+        limit=val_limit, drop_last=False, pin_memory=pin_memory, feature_subset=feature_subset,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
-    model = GRUCTC(
-        n_sessions=len(session_to_index),
-        hidden_size=model_config["hidden_size"],
-        n_layers=model_config["n_layers"],
-        dropout=model_config["dropout"],
-        bidirectional=model_config["bidirectional"],
-        use_day_layers=model_config["use_day_layers"],
-        input_dropout=model_config["input_dropout"],
-        smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
-        patch_size=model_config.get("patch_size", 1),
-        patch_stride=model_config.get("patch_stride", 1),
-        day_layer_parameterization=model_config.get("day_layer_parameterization", "full"),
-        day_layer_rank=model_config.get("day_layer_rank", 16),
-    ).to(device)
+    model = GRUCTC(**_model_kwargs(resolved_model_config, len(session_to_index), n_features)).to(device)
 
     optimizer = torch.optim.Adam(
         model.parameters(), lr=training_config["learning_rate"],
@@ -274,7 +322,7 @@ def main() -> None:
         "experiment_name": exp_config["experiment_name"],
         "split_name": split["name"],
         "split_path": str(args.split),
-        "model": model_config,
+        "model": resolved_model_config,
         "training": effective_training_config,
         "run_name": run_name,
         "smoke": args.smoke,
@@ -287,7 +335,8 @@ def main() -> None:
         logger.log_config(resolved_config)
 
     print(f"[02_train] run_dir={run_dir}  device={device}  n_sessions={len(session_to_index)}  "
-          f"train_trials={len(train_sampler.trial_ids)}  smoke={args.smoke}")
+          f"train_trials={len(train_sampler.trial_ids)}  smoke={args.smoke}  "
+          f"feature_subset={args.feature_subset}")
 
     summary = fit(
         model, train_loader, val_loader, optimizer, criterion, device,
@@ -307,17 +356,7 @@ def main() -> None:
         # cleanly (training/checkpoint.py's weights_only handling) --
         # cheap, and catches a corrupt-checkpoint failure at train time
         # rather than whenever it's next needed for evaluation.
-        sanity_model = GRUCTC(
-            n_sessions=len(session_to_index), hidden_size=model_config["hidden_size"],
-            n_layers=model_config["n_layers"], dropout=model_config["dropout"],
-            bidirectional=model_config["bidirectional"], use_day_layers=model_config["use_day_layers"],
-            input_dropout=model_config["input_dropout"],
-            smoothing_sigma_bins=model_config["smoothing_sigma_bins"],
-            patch_size=model_config.get("patch_size", 1),
-            patch_stride=model_config.get("patch_stride", 1),
-            day_layer_parameterization=model_config.get("day_layer_parameterization", "full"),
-            day_layer_rank=model_config.get("day_layer_rank", 16),
-        )
+        sanity_model = GRUCTC(**_model_kwargs(resolved_model_config, len(session_to_index), n_features))
         load_checkpoint(run_dir / "checkpoint_best.pt", sanity_model)
         print(f"[02_train] checkpoint_best.pt reloads cleanly (epoch {summary['best_epoch']}).")
 
