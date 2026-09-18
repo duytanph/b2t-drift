@@ -97,3 +97,10 @@ The drift results this project exists to produce are **relative**
 measurements — `effective_signal` (real vs. shuffled-input PER) and the
 day-layer recalibration gap — and do not depend on matching the published
 absolute PER.
+
+**Attribution (Phase 2) is complete.** Three mechanisms are confirmed —
+SNR loss, tuning change, and subspace rotation — and channel death is
+ruled out. All three confirmed mechanisms are inter-correlated
+(|ρ| 0.70–0.90) and cannot be ranked or separated by this design; see
+`docs/DESIGN.md` section 6 for the verdict and `docs/FINDINGS.md` for the
+measurements behind it.

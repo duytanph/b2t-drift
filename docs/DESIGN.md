@@ -16,8 +16,8 @@ loss, attributes it to specific causes, and compares recalibration
 strategies under a fixed budget of participant time.
 
 - **Measurement** — how fast does PER degrade with days since calibration?
-- **Attribution** — why: channel death, tuning change, or subspace
-  rotation? (Marginal drift is already removed upstream — section 6.)
+- **Attribution** — settled (section 6): SNR loss, tuning change, and
+  subspace rotation confirmed and confounded; channel death ruled out.
 - **Decision** — given a fixed budget of new-day participant time, what's
   the best use of it?
 
@@ -109,9 +109,8 @@ participant-time cost.
 | **2 — new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | Structurally identical to the `day_weights`/`day_biases` layers found in the official checkpoint (`docs/FINDINGS.md`). More degrees of freedom than Arm 1; can partially compensate for a shifted phoneme-to-channel mapping. |
 | **3 — fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | Highest participant-time and compute cost. **Catastrophic-forgetting risk at small N**: too little new-day data and whole-network fine-tuning can overfit to the N calibration sentences, losing generalization the frozen-backbone arms would have kept. |
 
-A fourth arm — recomputing per-session z-score statistics — is retired:
-the data already does this for free via a rolling per-channel z-score
-(`docs/DATASET.md` section 9 item 7).
+A fourth arm (recomputing per-session z-score statistics) is retired —
+the data already does this via a rolling per-channel z-score (`docs/DATASET.md` section 9 item 7).
 
 **Arm 2 uses the `"diagonal"` parameterization** (1,024 params/session)
 at `day_layer_penalty` λ=300 — kept because the best day-layer config
@@ -126,54 +125,58 @@ are unstable when trained jointly across many sessions").
 **Per-session calibration is nearly free to omit under `"diagonal"`:**
 the identity-redirect control costs **−0.0038** PER on average, against
 **+0.313** under `"full"` (`docs/FINDINGS.md`: "The identity-day-layer
-redirect control, repeated under diagonal day layers"). **Question 3 is
+redirect control, repeated under diagonal day layers"). Question 3 is
 therefore "how much accumulated drift can a small labeled budget
-recover, and at what elapsed time does it stop being sufficient"** — not
-"does recalibration help immediately," since the +5-day held-out gap is
-0.008 (`docs/FINDINGS.md`: "The cut-point sweep: calibration-data
-advantage is front-loaded and fades by ~100 days"). Whether a dedicated
-diagonal fit on ONE drifted session, frozen backbone, no anchor, has the
-capacity to recover accumulated drift is open — the joint-training
-result above does not settle it.
+recover, and at what elapsed time does it stop being sufficient" — not
+"does recalibration help immediately" (the +5-day held-out gap is only
+0.008 — `docs/FINDINGS.md`: "The cut-point sweep..."). Whether a
+diagonal fit on one drifted session recovers accumulated drift is open.
+
+**Arm 1's premise is no longer hypothetical**: subspace rotation is
+confirmed, large, and independent of channel health (3.05–3.17 deg/100d,
+tracking PER at ρ=0.908 — `docs/FINDINGS.md`: "Subspace rotation
+confirmed..."), giving Arm 1 a real, measured target rather than a
+hopeful premise.
 
 ---
 
 ## 6. What a rising PER curve means
 
-The release pipeline applies three independent adaptive corrections, at
-three different timescales, before any data reaches our model. This
-determines what the ATTRIBUTION question (section 4) can and cannot
-conclude, and motivates the arms in section 5.
+The release pipeline applies three independent adaptive corrections
+before any data reaches our model — this bounds what the ATTRIBUTION
+question (section 4) can conclude.
 
 | # | Correction | Timescale | Removes |
 |---|---|---|---|
-| 1 | RMS spike-detection threshold (`docs/DATASET.md` section 9 item 3) | ~50 sentences (recomputed from the preceding block) | Slow drift in a channel's noise floor |
-| 2 | Rolling per-channel z-score (`docs/DATASET.md` section 9 item 7) | 20 sentences (rolling) | Per-channel gain/offset (affine) changes |
-| 3 | Day-specific input layer (`docs/FINDINGS.md`: "Block count decreases...") | Trained per session | Whatever a learned linear map can capture — starts at identity, contributes nothing until trained |
+| 1 | RMS spike-detection threshold (`docs/DATASET.md` section 9 item 3) | ~50 sentences | Slow drift in a channel's noise floor |
+| 2 | Rolling per-channel z-score (`docs/DATASET.md` section 9 item 7) | 20 sentences (rolling) | Per-channel gain/offset changes |
+| 3 | Day-specific input layer (`docs/FINDINGS.md`: "Block count decreases...") | Trained per session | Whatever a learned linear map can capture |
 
-Stage 1 tracks noise, not signal: as an electrode becomes encapsulated,
-spike amplitude shrinks while the noise floor holds steady, so SNR falls
-and crossing rate genuinely declines — a channel can appear stable while
-dying if the noise floor moves with it, so channel-mortality analysis
-must use recovered raw spike counts and the +10 clip-saturation
-signature (`docs/DATASET.md` section 9 items 8–9), not crossing rate
-alone. Stage 2 removes per-channel affine changes only, not channel
-mixing or population geometry. Stage 3 is our own intervention (Arm 2),
-not something upstream.
+Stage 1 tracks noise, not signal — a channel can appear stable while
+dying if its noise floor moves with it, so mortality analysis must use
+recovered raw spike counts and clip-saturation (`docs/DATASET.md`
+section 9 items 8–9), not crossing rate. Stage 2 removes per-channel
+affine changes only. Stage 3 is our own intervention (Arm 2). Marginal
+drift is removed from view by stages 1–2 and cannot be studied here.
 
-**Attribution: both SNR loss and tuning change contribute, not SNR loss
-alone.** `deletion_rate` and `substitution_rate_among_emitted` both rise
-with elapsed time in every cut point of the sweep (`docs/FINDINGS.md`:
-"Substitution rate among emitted phonemes rises under the settled
-architecture -- the old flatness was a ceiling artifact") — deletions
-point at channels going quiet, rising substitution-among-emitted at a
-shifting phoneme-to-channel mapping. Subspace rotation remains a
-candidate but is not yet measured directly.
-Marginal drift (gain/offset, noise-floor drift) is removed from view by
-stages 1–2 and cannot be studied with this release. Any degradation the
-curve shows has already survived three independent, causal adaptive
-corrections — it cannot be attributed to scaling, gain, offset, or
-noise-floor drift.
+**Attribution verdict (Phase 2 complete):**
+
+| Mechanism | Verdict | FINDINGS.md pointer |
+|---|---|---|
+| Channel death | **RULED OUT** — 2/256 channels crossed below 2 Hz and stayed, both at the final session; population trend n.s. (p=0.131) | "Channel death across 45 sessions: ruled out" |
+| SNR loss | **CONFIRMED at the feature level** (TX declines 26× faster than SBP, p=3.0e-6 gap widening) **but not at the decoder level** — TX/SBP are redundant (median pair r=0.72, stable across 611d), so an SBP-only decoder is not more drift-resistant | "SNR loss confirmed...", "SBP-only is not more drift-resistant..." |
+| Tuning change | **CONFIRMED, survives the healthy-channel control** — correlation decays −0.056/100d regardless of excluding dying/low-rate channels | "Tuning change confirmed via CTC forward-backward..." |
+| Subspace rotation | **CONFIRMED, survives the control, tracks PER at ρ=0.908** — as tightly as tuning change, not more | "Subspace rotation confirmed..." |
+
+**Drift is multi-causal; this design cannot rank the three confirmed
+mechanisms.** They are inter-correlated at |ρ| 0.70–0.90 — not
+independent evidence, but not sloppy measurement: one physical process,
+array micromotion through tissue over months, plausibly produces
+reduced spike amplitude, altered neuron sampling, and coherent
+reorientation simultaneously. SBP magnitude alone stands apart,
+uncorrelated with everything else (all p>0.23) — it resists the shared
+process better at the feature level, though a decoder built from it
+alone is not thereby protected.
 
 ---
 
@@ -199,19 +202,17 @@ manifests built and validated; a 126-day coverage gap").
 | s15 | 3,150 | 14 | +5 to +546d |
 | s20 | 3,336 | 19 | +100 to +513d |
 
-**The +2-to-+133-day region is a smooth, continuous ramp, not a step**
-— s05's densely-sampled early sessions show PER rising from 0.277 at
-+2d to 0.746 at +126d with no discontinuity, corroborated independently
-by s10 (`docs/FINDINGS.md`: "The cut-point sweep: calibration-data
-advantage is front-loaded and fades by ~100 days").
+**The +2-to-+133-day region is a smooth ramp, not a step** — s05's early
+sessions show PER rising from 0.277 at +2d to 0.746 at +126d with no
+discontinuity, corroborated by s10 (`docs/FINDINGS.md`: "The cut-point
+sweep: calibration-data advantage is front-loaded and fades by ~100 days").
 
 **Primary cut point: s05**, per the pre-committed rule (largest cut
 point with acceptable validation PER, preferring earlier cuts when
 comparable within 0.02 — `docs/FINDINGS.md`: "Pre-committed cut-point
 selection rule"). **s15 is reported alongside as a robustness check**:
-the rule is silent on generalization and training stability, both of
-which s05 scores worst on (same entry's addendum, and "The cut-point
-sweep...").
+the rule is silent on generalization/stability, both of which s05
+scores worst on (same entry's addendum, and "The cut-point sweep...").
 
 **Corpus stratification: Switchboard-only** is the primary analysis;
 all-corpora is a fallback, since pooling would conflate task-distribution
@@ -235,10 +236,9 @@ and is useful only for validating our evaluation code.
 - **Length-bucketed batching** (`LengthBucketedSampler`,
   `data/collate.py`). `n_time_steps` spans 138–2179+ bins; random
   batching wastes most of each batch on padding (35.5% vs. 13.7%
-  bucketed, at a 32-trial pool). Only batch ORDER is shuffled per epoch
-  — batch CONTENTS are not randomized. **Cost, accepted deliberately:**
-  batches are non-i.i.d. in sentence length — standard practice in
-  speech recognition, not a bug.
+  bucketed, at a 32-trial pool). Only batch ORDER is shuffled per epoch.
+  **Cost, accepted deliberately:** batches are non-i.i.d. in sentence
+  length — standard practice in speech recognition, not a bug.
 - **DataLoader: `num_workers=2`, `persistent_workers=True`,
   `pin_memory=True`.** Settled by a real measurement against the actual
   dataset on SSD storage, not synthetic benchmarking — a benchmark must
@@ -248,20 +248,17 @@ and is useful only for validating our evaluation code.
   the training bottleneck"). Dataloader wait is under 2% of epoch time at
   `num_workers >= 1`; GPU compute is the dominant cost.
 - **Normalization is already applied upstream** — a rolling per-channel,
-  per-sentence window, NOT per-block/session/global
-  (`docs/DATASET.md` section 9 item 7). `data/normalize.py` must not
-  implement any block/session/global z-score of its own; the values are
-  already normalized by a mechanism outside our control.
+  per-sentence window, NOT per-block/session/global (`docs/DATASET.md`
+  section 9 item 7). `data/normalize.py` must not implement its own.
 - **GPU budget is not a constraint on model size.** The full baseline
   architecture (5 layers, 1024 hidden) trains with no OOM risk even at
-  batch=64; real-training peak VRAM for the actual small/default config
-  is 1.75 GB (`docs/FINDINGS.md`: "GPU compute is not a constraint",
-  "Storage medium, not DataLoader configuration..."). No need to shrink
-  the model to fit a GPU memory budget.
+  batch=64; real-training peak VRAM for the small/default config is
+  1.75 GB (`docs/FINDINGS.md`: "GPU compute is not a constraint",
+  "Storage medium, not DataLoader configuration...").
 - **PER is independent of batch composition.** `GRUCTC.forward` zeros
-  every padded timestep immediately after `DayLayers` and before the
-  smoothing convolution; `input_lengths` is a mandatory forward argument
-  (`docs/FINDINGS.md`: "Batch composition changed decoded output").
+  every padded timestep right after `DayLayers`, before smoothing;
+  `input_lengths` is a mandatory forward argument (`docs/FINDINGS.md`:
+  "Batch composition changed decoded output").
 
 ---
 
@@ -375,6 +372,9 @@ optimizer's first step, or use a fresh optimizer for that phase.
   reduces but does not eliminate this confound** (trial-level r=0.137,
   p=1.3e-28). Report per-session median seq_len alongside PER on every
   drift curve (`figures/sentence_length_over_time.png`).
+- **SNR loss, tuning change, and subspace rotation are confirmed but
+  cannot be separated or ranked by this design** (section 6; |ρ| 0.70–0.90
+  inter-correlated).
 
 ---
 

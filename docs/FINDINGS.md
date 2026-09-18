@@ -1339,3 +1339,417 @@ favor s15 or s10) and why the rule was followed rather than overridden.
 `figures/drift_curve.png`, `figures/error_breakdown.png`, and the four
 `results/*/per_session_metrics.csv` files are the artifacts this entry
 describes.
+
+---
+
+### The pretrained baseline checkpoint verified as a drift-independent alignment tool (2026-09-17)
+
+**Question:** Phase 2's tuning-matrix analysis needs an alignment tool
+whose own quality does not trend with session date -- our own decoders
+degrade across sessions, which would contaminate any tuning measurement
+with the very drift being measured. Is the officially released pretrained
+checkpoint (`data/external/t15_pretrained_rnn_baseline/`) usable for this,
+and can it actually be loaded and run?
+
+**Method:** Built an explicit adapter
+(`src/b2t_drift/models/pretrained_baseline.py`) mapping the checkpoint's
+113 top-level parameters into a `GRUCTC` subclass matching its architecture
+(5 GRU layers, hidden 768, patch 14/4, `"full"` day layers) -- asserted
+every parameter accounted for, no silent skipping. Ran inference on the
+official val partition of 3 sessions, then 10 sessions spread across the
+full 611-day range, correlating PER against session date.
+
+**Result:** All 113 checkpoint parameters mapped: 45 day-weight/day-bias
+pairs stacked into `DayLayers`' `"full"` representation, 20 GRU tensors
+direct-copied, 2 output-layer tensors renamed, and `h0` (see the
+correction below). The day-weight matrix orientation (`x @ W` vs.
+`x @ W.T`) was ambiguous from shape and identity-init alone; resolved
+empirically by comparing decode quality under each convention -- `x @ W`
+untransposed reproduces sane PER, the transposed convention does not.
+3-session val PER: **0.109**, against the checkpoint's recorded 0.101
+(close, within per-session sampling noise at n=20-35 trials/session).
+10-session date-spread PER shows **no significant trend**: Pearson
+r=0.40 (p=0.25), Spearman rho=0.28 (p=0.43), linear slope 0.013 PER/100d
+(p=0.25).
+
+**The `h0` discovery -- a correction to "Block count decreases over the
+recording; pretrained checkpoint uses patched input and per-session
+layers" (2026-09-01).** That entry's checkpoint inspection reported 5 GRU
+layers, hidden 768, patched 7,168-dim input, and 45 per-session
+day-weight/day-bias pairs -- but missed one further learned parameter: an
+initial GRU hidden state `h0`, shape `(1, 1, 768)`, broadcast across every
+layer and batch item, `max|h0| = 0.435` (genuinely nonzero, not left at
+some zero default). `GRUCTC` has no equivalent (PyTorch's default
+zero-initialized hidden state); `PretrainedBaselineRNN` adds it via a
+minimal `_run_gru` extract-method hook on `GRUCTC` (no behavior change for
+existing code). Effect on PER: real learned `h0` vs. zeroed, 0.0894 vs.
+0.0904 on a 35-trial sample -- **~0.001**, negligible. Nothing downstream
+(the checkpoint's `val_PER`, the drift-curve models, or any reported
+result) changes; this is a correction to a committed claim about the
+checkpoint's architecture, not to any measurement.
+
+**Consequence:** The checkpoint is confirmed a valid, date-independent
+alignment tool -- Phase 2's tuning-matrix and subspace analyses ("Tuning
+change confirmed via CTC forward-backward..." and "Subspace rotation
+confirmed..." below) use it via `src/b2t_drift/models/pretrained_baseline.py`,
+never a model we trained.
+
+---
+
+### Channel death across 45 sessions: ruled out (2026-09-17)
+
+**Question:** Does channel death -- electrodes crossing the >=2 Hz "has
+spiking activity" threshold (Willett et al. 2023) and staying below it --
+explain a meaningful share of the drift curve?
+
+**Method:** Recovered raw firing rates via the exact per-(trial, channel)
+lattice route (`docs/DATASET.md` section 9 item 9: `sigma = 1/spacing`,
+`mu = -min*sigma`, `raw = released*sigma + mu`), NOT the Poisson
+approximation, across every labeled trial of all 45 sessions --
+2,431,488 (trial, channel) pairs (`src/b2t_drift/analysis/firing_rate.py`,
+tested against synthetic lattices). Counted, per session, TX channels with
+median recovered rate below 2 Hz.
+
+**Result:** Lattice recovery succeeded on **94.4%** of 2,431,488 pairs
+(2,295,388), consistent with the earlier 95.8%-on-240-pairs estimate at
+much larger scale. **19 of 11,520 (session, channel) cells had zero
+successful trials** -- flagged explicitly and excluded from that cell's
+median, not silently dropped. Population trend in below-2Hz channel count
+vs. date: **+0.425 channels/100d, p=0.131** -- not significant. First
+session (`t15.2023.08.11`): 2 channels below 2 Hz (135, 168, both array
+55b) -- **both recovered** by later sessions. Last session
+(`t15.2025.04.13`): 2 different channels below 2 Hz (63 ventral 6v, 211
+dorsal 6v). **Exactly 2 of 256 channels cross from above to below 2 Hz and
+stay there, and both cross at the final session** (2025-03-30 ->
+2025-04-13, the last 14-day step in the whole 611-day range) -- there is
+no accumulating population of dead channels across the recording, only
+these two very-late crossings. Per-array breakdown: only dorsal 6v shows a
+significant trend (+0.420/100d, p=0.023); ventral 6v, area 4, and 55b do
+not (p=0.29, 0.093, 0.985). **Caveat, stated plainly: one significant
+array of four at p=0.023 is roughly what chance alone would produce (a
+Bonferroni correction at 4 comparisons would need p<0.0125) -- suggestive,
+not an established array-specific effect.**
+
+**Consequence:** Channel death is **ruled out** as a driver of the drift
+curve. `docs/DESIGN.md` section 6 records this as settled.
+
+---
+
+### Clip saturation is a concurrent marker of low firing rate, not confirmed as a leading indicator (2026-09-17)
+
+**Question:** `docs/DATASET.md` section 9 item 8 flagged clip-saturation
+rate (fraction of values exactly at the +10 z-score clip) as a *candidate*
+signature of channel death, untested. Does it hold up, and can it predict
+death before it happens?
+
+**Method:** Per-session, per-column saturation rate across every labeled
+trial, all 45 sessions. Correlated TX-column saturation against the same
+session's recovered firing rate (previous entry), within session. For the
+2 channels confirmed crossing below 2 Hz and staying (63, 211), compared
+saturation rate before, at, and after their crossing session.
+
+**Result:** Global saturation rate (all 512 columns): 0.0070%, consistent
+with the documented 0.009% baseline from a smaller sample. **Pooled
+Spearman(saturation, firing rate) = -0.793, p approximately 0, and the
+correlation is individually significant and negative in all 45 of 45
+sessions** -- the strongest, most consistent result in this round. Mean
+saturation rate also rises with date: **+1.21e-5/100d, p=0.0023**. The
+leading-indicator test is **underpowered**: both crossing channels (63,
+211) cross at the very last session, leaving exactly one post-crossing
+data point each. Channel 211's saturation is concurrent-to-lagging
+(0.000244 mean before crossing -> 0.0000059 AT the last-alive session ->
+0.000741 after -- it does not rise in advance of the crossing). Channel 63
+is ambiguous (0.000400 before, 0.000341 at, 0.000514 after -- a small,
+inconsistent change).
+
+**Consequence:** The Week 0 hypothesis is **supported as a
+cross-sectional/concurrent marker** of low firing rate (very strong,
+universal, statistically overwhelming) and **untested as a leading
+indicator** -- not enough crossing events with enough post-crossing
+sessions to say whether saturation predicts death before it happens. **Do
+not upgrade this beyond what was measured**: it identifies channels that
+are already low-firing, not channels about to become so.
+
+---
+
+### SNR loss confirmed at the feature level: TX declines 26x faster than SBP (2026-09-17)
+
+**Question:** The project's one mechanistic prediction made before any
+data was examined: TX should degrade faster than SBP, since TX reports
+zero once spike amplitude falls below -4.5xRMS while SBP still registers
+reduced energy in that regime. Does the data show this?
+
+**Method:** Per session, mean recovered TX firing rate across all 256
+channels (previous entries) and mean SBP magnitude (mean absolute
+z-scored value across all 256 SBP columns), both normalized to their
+session-1 value for comparability. Linear slope vs. date for each; a
+direct test of whether the gap between them widens.
+
+**Result:** TX normalized-rate slope **-0.0399/100d (p=4.9e-7)** vs. SBP
+normalized-magnitude slope **-0.00154/100d (p=0.045)** -- a **26x ratio**.
+Over the observed 611 days that is roughly a **24% TX decline against 1%
+for SBP**. The gap (SBP_norm - TX_norm) widens significantly: slope
++0.0383/100d, **p=3.0e-6**. TX rate tracks the s05 PER curve at
+**Spearman rho=-0.750 (p=6.8e-6)**; SBP does not (**rho=-0.191, p=0.34**).
+Electrode 211 (dorsal 6v, one of the two channels confirmed crossing below
+2 Hz and staying -- previous entries) is the clean single-electrode
+mechanism case: TX collapses from 1.0x to 0.05-0.2x normalized by day 200,
+while SBP holds flat near 1.0x throughout, even ticking slightly above it.
+**Caveat: SBP's own p=0.045 is borderline (not comfortably below 0.05) --
+the robust claim is the RATIO between the two slopes and the significantly
+widening gap, not that SBP itself is confirmed to be declining.**
+
+**Consequence:** SNR loss is confirmed at the feature level. **See
+"SBP-only is not more drift-resistant than TX-only, despite SNR loss's
+feature-level prediction -- TX/SBP redundancy is why" (2026-09-18) for why
+this does not extend cleanly to a decoder-level prediction.**
+
+---
+
+### Which channels the decoder depends on differs between an early and a late held-out session, with no rank correlation between them (2026-09-17)
+
+**SUPERSEDED in its interpretation by "Late-session channel dependence is
+unmeasurable at this trial count, not diffuse" (2026-09-17)** -- the
+conclusion below, that late-session dependence is "diffuse and
+non-reproducible," overstates what a single ablation run on ~94 trials can
+show. The superseding entry's split-half test demonstrates the late-session
+measurement itself is too noisy to distinguish "genuinely diffuse" from
+"unmeasurable." The per-channel delta-PER numbers below are not wrong and
+are not superseded -- only the interpretive claim about what the
+early-vs-late difference MEANS is corrected.
+
+**Question:** Firing rate measures whether a channel is active, not
+whether the decoder uses it. Using the s05 checkpoint (the primary cut
+point), which channels does the decoder actually depend on, at an early
+vs. a late held-out session?
+
+**Method:** Per-channel ablation (zero both TX and SBP columns for that
+electrode, re-evaluate) across all 256 electrodes, on one early held-out
+session (`t15.2023.08.27`, +2d) and one late one (`t15.2025.04.13`,
++597d). The full 256-channel sweep was not prohibitive (92s and 51s
+respectively).
+
+**Result:** Early session (PER=0.276): 4/256 channels cost >0.01 PER
+(max: channel 169 at 0.023), 83/256 negligible (<0.001). Late session
+(PER=0.795): **0/256 channels cost >0.01 PER**, 59/256 negligible.
+Weak/no correlation between firing rate and per-channel dependence in
+either session (early rho=0.083 p=0.18 n.s.; late rho=0.126 p=0.044, small
+effect) -- high-firing channels are not reliably the ones the decoder
+depends on. Spearman(delta-PER_early, delta-PER_late) across all 256
+channels: **rho=-0.023, p=0.71** -- no relationship; top-20-most-depended-
+on-channel overlap is 2/20 (chance baseline ~1.6).
+
+**Consequence:** Channel-level dependence appeared diffuse and
+non-reproducible by the late session, read at the time as consistent with
+the previously-reported effective-signal collapse. **See the superseding
+entry for why this reading does not survive a direct test of whether it is
+measurable at all.**
+
+---
+
+### Late-session channel dependence is unmeasurable at this trial count, not diffuse (2026-09-17)
+
+**Supersedes** the interpretation (not the numbers) in "Which channels the
+decoder depends on differs between an early and a late held-out session,
+with no rank correlation between them" (2026-09-17), which read the
+early-vs-late rank-correlation gap as evidence that channel-level
+dependence becomes diffuse by the late session.
+
+**Question:** That gap has two possible causes the single-session analysis
+cannot distinguish: dependence genuinely diffused across channels, or
+single-session ablation is too noisy to measure dependence at all in the
+late regime. These support very different claims.
+
+**Method:** Split each of the same two sessions' trials into two random
+halves (fixed seed), ran the full 256-channel ablation independently on
+each half, and correlated per-channel delta-PER between halves within the
+same session.
+
+**Result:** Early session (+2d): half A (87 trials) vs. half B (88
+trials), Spearman rho=0.116 (p=0.064, marginal on the full 256-channel
+correlation) but **top-20-most-depended-on-channel overlap = 9/20** --
+against a hypergeometric chance baseline of ~1.6, **P(overlap >= 9 by
+chance) = 1.6e-6**. Late session (+597d): half A (47 trials) vs. half B
+(47 trials), Spearman rho=0.054 (p=0.39), **top-20 overlap = 2/20 --
+P(overlap >= 2 by chance) = 0.48**, indistinguishable from chance.
+
+**Consequence:** The early session's halves agree (a concentrated,
+reproducible set of ~9-10 channels the decoder depends on, even though the
+full-256 rank correlation is diluted by mostly-noise channels); the late
+session's halves do not agree at all. Per the decision rule fixed before
+running this: **late-session channel dependence is UNMEASURABLE at ~94
+trials, not evidence that dependence became diffuse.** The earlier
+entry's "diffuse and non-reproducible late" language is retracted; the
+corrected statement is that this method cannot resolve channel-level
+dependence at the late session's trial count, one way or the other.
+
+---
+
+### Tuning change confirmed via CTC forward-backward, and it survives the healthy-channel control (2026-09-17)
+
+**Question:** Does the phoneme-to-channel mapping itself shift over 20
+months, independent of channels simply going quiet (SNR loss)?
+
+**Method:** Implemented CTC forward-backward
+(`src/b2t_drift/evaluation/ctc_forward_backward.py`) to get per-timestep
+posterior probabilities over the 41 classes from the pretrained
+checkpoint's emissions and each trial's known target -- alpha/beta
+recursion in log space, verified against `nn.CTCLoss`'s marginal
+likelihood to numerical tolerance (8 unit tests, including a
+forced-alignment case where T equals the raw target length with no
+consecutive repeats, which has exactly one valid path regardless of the
+model's actual output). Patched-resolution posteriors (one frame per 4 raw
+bins) mapped back to 20ms bins by repeating each frame's posterior across
+its `patch_stride`, covering every raw bin exactly once with no gaps or
+double-assignment. Built one 41x512 tuning matrix per session
+(posterior-weighted mean feature vector per class, all labeled trials, all
+45 sessions) -- **0 infeasible trials** across every trial processed.
+Correlated tuning matrices across all 990 session pairs (mean PER-PHONEME
+correlation of the two matrices' same-class rows, not the flattened-matrix
+correlation -- chosen because flattening conflates the across-phoneme
+pattern with the within-phoneme channel structure this analysis actually
+wants; see `src/b2t_drift/analysis/tuning.py`) against days separating the
+pair.
+
+**Result:** Correlation vs. days-apart: **slope=-0.0564/100d,
+p=1.4e-163** across 990 pairs. **THE LOAD-BEARING CONTROL: recomputed
+excluding channels 63 and 211 (confirmed dying) and the bottom decile of
+mean firing rate (27 electrodes total, both TX and SBP columns) --
+slope=-0.0562/100d, p=3.8e-162, essentially unchanged.** This control
+matters because a dying channel's tuning would appear to change simply
+because its signal is vanishing into noise -- if the decay were SNR loss
+in disguise, excluding the degraded channels would flatten it. It does not
+move. Per-phoneme breakdown: fastest-decaying are silence (class 40,
+-0.1005/100d), Z, IY, AY, ER; slowest are G, OY, K, UH, JH. Silence decays
+at roughly double the real-phoneme mean (-0.0553/100d, std 0.0115) --
+consistent with silence's different acoustic/motor character, not a red
+flag for the aggregate (each class contributes equally to the reported
+mean, not weighted by token frequency, so silence's faster decay does not
+mechanically inflate the headline number).
+
+**The alignment-free cross-check (Task C), independent of any model.**
+For each session, weighted each trial's mean feature vector by how often
+each phoneme appears in that trial's target, no alignment at all. Same
+correlation-vs-days measurement: **slope=-0.0365/100d, p=5.5e-148** --
+same direction, **~65% the magnitude** of the forward-backward figure. The
+smaller magnitude is expected: every trial average mixes ALL of its
+phonemes together with its silence, diluting any one phoneme's specific
+signature -- coarser by construction, not a disagreement. **The
+forward-backward figure (-0.0564/100d) is the better magnitude estimate;
+the alignment-free cross-check is the better evidence that the effect is
+real, since it cannot be an artifact of the model used for alignment.**
+
+**Consequence:** Tuning change is confirmed, independent of SNR loss
+(survives the healthy-channel control) and independent of the alignment
+method (survives the alignment-free cross-check). Figure:
+`figures/tuning_correlation_decay.png`.
+
+---
+
+### Subspace rotation confirmed, and it tracks PER as tightly as tuning change (2026-09-17)
+
+**Question:** Has the population-activity manifold rotated in 256-d
+space, independent of the per-channel affine changes the rolling z-score
+already removes? This is the failure mode Arm 1 (unsupervised
+distribution alignment, `docs/DESIGN.md` section 5) is built to correct,
+if it exists.
+
+**Method:** Per session, PCA on the 512-dim features pooled across all
+labeled trials (via an incrementally-accumulated 512x512 covariance
+matrix, never materializing the full per-bin data at once). Principal
+angles (via SVD of the two subspaces' cross-product) between the top-20
+subspaces of every one of the 990 session pairs, mean angle vs. days
+separating the pair. Repeated on healthy channels only (same exclusion as
+the tuning-change control). Separately, built a reference subspace from
+the s05 training block (sessions 1-5) and measured each held-out
+session's angle to it, against the s05 PER curve.
+
+**Result:** Dimensionality needed for 90% variance: mean ~270 components
+(range 248-287), **no significant trend with date** (slope -0.567/100d,
+p=0.511) -- the manifold's dimensionality itself is stable; what moves is
+its ORIENTATION. Principal angles across all 990 pairs: **slope=3.17
+deg/100d, p=2.5e-121**. **Healthy-channel-only control: slope=3.05
+deg/100d, p=1.7e-111 -- barely reduced from the all-channel figure**, the
+same pattern as the tuning-change control. Angle-to-s05-reference vs. the
+s05 PER curve (27 matched sessions): **Spearman rho=0.908, p=6.3e-11**.
+
+**Stated precisely rather than overclaimed: this is NOT tighter than
+tuning change's own correlation with PER (rho=-0.898 to -0.903, depending
+on channel restriction -- previous entry). With 27 sessions, 0.908 and
+0.90 are statistically indistinguishable.** Both track PER equally
+tightly; this is part of why the underlying mechanisms cannot be ranked
+against each other by correlation strength (`docs/DESIGN.md` section 6).
+
+**Consequence for Arm 1.** Rotation is large, statistically robust, and --
+because it survives the healthy-channel control -- **independent of
+channel health**, meaning it is not simply a symptom of dying electrodes
+distorting the population geometry. This gives Arm 1 (unsupervised linear
+alignment, no labels needed) a real, MEASURED target rather than a
+hopeful premise: there is a genuine rotation of this magnitude for a
+linear map to correct. `docs/DESIGN.md` section 5 is updated. Figure:
+`figures/subspace_angles.png`.
+
+---
+
+### SBP-only is not more drift-resistant than TX-only, despite SNR loss's feature-level prediction -- TX/SBP redundancy is why (2026-09-18)
+
+**Question:** SNR loss predicts an SBP-only decoder should be more
+drift-resistant than a TX-only one (TX declines 26x faster -- "SNR loss
+confirmed at the feature level" above). Does training and evaluating both
+confirm this?
+
+**Method:** Trained TX-only (columns 0-255) and SBP-only (columns
+256-511) decoders on `temporal_s01_s05_switchboard`, settled architecture
+otherwise unchanged, 150 epochs, early stopping disabled (a
+`feature_subset` option added to `TrialDataset`/`collate_trials`/
+`build_shuffled_batches` and a `--feature-subset` flag to
+`02_train.py`/`03_evaluate.py`, tested). Evaluated both with
+`--shuffled-control` across all held-out sessions.
+
+**Result -- level and slope point in OPPOSITE directions; state both, do
+not read one as confirming the other.** SBP-only reached better val PER
+than TX-only (**0.16306 vs. 0.18238**) and better PER in **24 of 27**
+held-out sessions -- essentially the whole 611-day range, not just at the
+start. But its PER slope is **+0.0693/100d against TX-only's +0.0507 --
+37% STEEPER, not flatter** -- and its `effective_signal` erodes faster too
+(-0.0848 vs. -0.0634/100d). **SBP is the better feature; it is not the
+more drift-resistant one. The decoder-level test does not confirm the
+feature-level prediction; the clean "route around degrading TX by
+weighting SBP" story is not supported end to end.**
+
+**Redundancy evidence.** Full-feature (512-dim) beats TX-only by 0.0247
+PER (13.6% relative) but beats SBP-only by only 0.0054 (3.3% relative) --
+adding TX on top of SBP buys almost nothing, while adding SBP on top of TX
+buys a great deal. Caveat: confounded with input width (256 vs. 512
+columns), not cleanly separable from "more features help" in general.
+
+**The direct test: per-electrode TX-vs-SBP correlation.** Column i (TX)
+and i+256 (SBP) are the same physical electrode. Per session, correlated
+each of the 256 electrodes' TX time series against its own SBP time
+series across all bins of that session's labeled trials, took the median
+across electrodes. **Median correlation stays high throughout the full
+611 days: 0.666 to 0.782, overall median 0.717** -- never drops to a low
+or moderate level. There IS a small, statistically significant declining
+trend (slope=-0.00933/100d, p=0.0002, driven mostly by the first ~250
+days, then roughly flat) -- a real, modest weakening, not a divergence:
+correlation never falls out of the 0.66-0.78 band.
+
+**This explains the contradiction.** TX and SBP are, throughout the whole
+recording, substantially redundant views of the same underlying spiking
+activity at each electrode (median r~0.72) -- both derive from the same
+shrinking spikes as an electrode encapsulates, through different
+transforms (a hard count vs. a continuous power). Because they are
+watching the same underlying process rather than two independent ones,
+whatever degrades one's DECODE quality over time (tuning change, subspace
+rotation -- both confirmed to affect the whole 512-dim population, not a
+TX-specific effect) degrades the other's too, even though TX's own raw
+FEATURE MAGNITUDE happens to decline faster. The feature-level SNR-loss
+prediction is about raw signal amplitude; the decoder-level result is
+dominated by the other two mechanisms (tuning change, subspace rotation),
+which do not distinguish TX from SBP. Figure:
+`figures/tx_sbp_pair_correlation.png`.
+
+**Consequence:** Confirms `docs/DESIGN.md` section 6's multi-causal
+verdict from the other direction: SNR loss alone cannot be the whole
+story, because a decoder built entirely from the feature that degrades
+least (SBP) is not thereby protected from drift.
