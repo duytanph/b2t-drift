@@ -12,7 +12,9 @@ from b2t_drift.data.hdf5_io import TrialId
 from b2t_drift.evaluation.calibration import (
     calibration_minutes,
     calibration_split_seed,
+    normalize_sentence,
     split_calibration_trials,
+    split_off_sentence_overlap,
 )
 
 
@@ -127,3 +129,71 @@ def test_calibration_minutes_empty_is_zero():
 def test_calibration_minutes_custom_bin_ms():
     trials = [_trial("a", n_time_steps=100)]
     assert calibration_minutes(trials, bin_ms=10.0) == pytest.approx(100 * 10.0 / 1000.0 / 60.0)
+
+
+# --- sentence-level de-duplication -----------------------------------------
+
+
+def _labeled(trial_key: str, sentence: str) -> TrialId:
+    return TrialId(
+        session_id="t15.2024.07.19", session_date=date(2024, 7, 19), partition="train",
+        trial_key=trial_key, block_num=1, trial_num=0, n_time_steps=100, seq_len=5,
+        sentence_label=sentence,
+    )
+
+
+def _trials_with_duplicated_sentences() -> list[TrialId]:
+    """10 distinct trials but only 5 distinct sentences: every sentence
+    appears exactly twice, as two DIFFERENT trials. Tests below calibrate on an
+    ODD number of trials (5): an even number could pick complete pairs and
+    produce no overlap at all, while an odd number guarantees at least one
+    calibrated sentence whose twin lands in evaluation."""
+    return [_labeled(f"trial_{i:04d}", f"sentence number {i % 5}.") for i in range(10)]
+
+
+def test_normalize_sentence_folds_case_and_whitespace_only():
+    assert normalize_sentence("  You CAN   go. ") == "you can go."
+    assert normalize_sentence("you can go.") == normalize_sentence("You can go.")
+    assert normalize_sentence("you can go") != normalize_sentence("you can go.")  # punctuation kept
+
+
+def test_split_off_sentence_overlap_removes_only_matching_eval_trials():
+    calib = [_labeled("c0", "hello there."), _labeled("c1", "another one.")]
+    evald = [_labeled("e0", "Hello  there."), _labeled("e1", "something new."), _labeled("e2", "another one.")]
+    kept, removed = split_off_sentence_overlap(calib, evald)
+    assert [t.trial_key for t in kept] == ["e1"]
+    assert [t.trial_key for t in removed] == ["e0", "e2"]
+
+
+def test_default_split_keeps_duplicate_sentences_in_eval():
+    """The default is unchanged (trial-level only) -- so the leak the
+    Phase 3 grid had is reproducible, not silently altered."""
+    trials = _trials_with_duplicated_sentences()
+    calib, evald = split_calibration_trials(trials, n_calibration=5, seed=3)
+    assert len(calib) + len(evald) == 10
+    cal_sents = {t.sentence_label for t in calib}
+    assert any(t.sentence_label in cal_sents for t in evald)  # overlap exists and is kept
+
+
+def test_dedup_sentences_removes_every_calibrated_sentence_from_eval():
+    trials = _trials_with_duplicated_sentences()
+    calib, evald = split_calibration_trials(trials, n_calibration=5, seed=3, dedup_sentences=True)
+    cal_sents = {normalize_sentence(t.sentence_label) for t in calib}
+    assert all(normalize_sentence(t.sentence_label) not in cal_sents for t in evald)
+    assert set(calib) & set(evald) == set()
+
+
+def test_dedup_leaves_the_calibration_set_unchanged():
+    trials = _trials_with_duplicated_sentences()
+    calib_plain, eval_plain = split_calibration_trials(trials, n_calibration=5, seed=3)
+    calib_dedup, eval_dedup = split_calibration_trials(trials, n_calibration=5, seed=3, dedup_sentences=True)
+    assert calib_plain == calib_dedup  # same seed -> same calibration trials either way
+    assert set(eval_dedup) <= set(eval_plain)  # dedup'd eval is a strict subset
+    assert len(eval_dedup) < len(eval_plain)
+
+
+def test_dedup_is_a_noop_when_all_sentences_are_distinct():
+    trials = [_labeled(f"trial_{i:04d}", f"unique sentence {i}.") for i in range(10)]
+    plain = split_calibration_trials(trials, n_calibration=4, seed=1)
+    dedup = split_calibration_trials(trials, n_calibration=4, seed=1, dedup_sentences=True)
+    assert plain == dedup

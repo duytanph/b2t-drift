@@ -4,12 +4,22 @@ PROTOCOL (docs/DESIGN.md section 5's "arms" -- Phase 3). For a given
 evaluation session and a given number of calibration trials `N`, every arm
 (Arm 0 through Arm 3b) must be compared on the SAME partition of that
 session's trials into `N` calibration trials and the rest as evaluation
-trials -- never evaluate on a trial used for calibration, and never let one
-arm see a different split than another for the same (session, N, split
-index). `calibration_split_seed` is the single place that maps
-`(session_id, n_calibration, split_index)` to a deterministic seed, so every
-caller that needs "the same partition" for a given cell gets it by
+trials -- never let one arm see a different split than another for the same
+(session, N, split index). `calibration_split_seed` is the single place that
+maps `(session_id, n_calibration, split_index)` to a deterministic seed, so
+every caller that needs "the same partition" for a given cell gets it by
 construction, without passing the actual trial lists around.
+
+THE UNIT OF LEAKAGE IS THE SENTENCE, NOT THE TRIAL. The rule "never evaluate
+on a calibration TRIAL" is not enough: the same sentence text can appear as
+two distinct trials in one session, so a model fine-tuned on one can be scored
+on the other and get credit for memorizing a phoneme sequence rather than
+decoding it. The correct rule is "never evaluate on a SENTENCE used for
+calibration." `split_calibration_trials(..., dedup_sentences=True)` enforces
+it. The DEFAULT is still `False` (trial-level exclusion only) -- deliberately,
+so existing results stay reproducible; the Phase 3 recalibration grid was
+built with `dedup_sentences=False`, and its sentence-overlap-corrected values
+are recorded alongside the originals in `results/recalibration_grid.csv`.
 """
 
 from __future__ import annotations
@@ -21,6 +31,34 @@ from collections.abc import Sequence
 from b2t_drift.data.hdf5_io import TrialId
 
 DEFAULT_BIN_MS = 20.0
+
+
+def normalize_sentence(label: str) -> str:
+    """Canonical form of a `sentence_label` for equality comparison:
+    case-folded with runs of whitespace collapsed. Punctuation is left
+    alone -- two labels differing only by punctuation are treated as
+    different sentences (conservative in the direction of NOT discarding
+    eval trials; `docs/DATASET.md` labels are consistently punctuated)."""
+    return " ".join(label.lower().split())
+
+
+def split_off_sentence_overlap(
+    calibration: Sequence[TrialId],
+    evaluation: Sequence[TrialId],
+) -> tuple[list[TrialId], list[TrialId]]:
+    """Split `evaluation` into `(kept, removed)`, where `removed` are trials
+    whose sentence text (`normalize_sentence`) also appears anywhere in
+    `calibration`.
+
+    Both lists keep `evaluation`'s relative order. `calibration` is never
+    modified. Either output may be empty.
+    """
+    calibration_sentences = {normalize_sentence(t.sentence_label) for t in calibration}
+    kept: list[TrialId] = []
+    removed: list[TrialId] = []
+    for t in evaluation:
+        (removed if normalize_sentence(t.sentence_label) in calibration_sentences else kept).append(t)
+    return kept, removed
 
 
 def calibration_split_seed(
@@ -58,6 +96,7 @@ def split_calibration_trials(
     trial_ids: Sequence[TrialId],
     n_calibration: int,
     seed: int,
+    dedup_sentences: bool = False,
 ) -> tuple[list[TrialId], list[TrialId]]:
     """Partition one session's trials into `n_calibration` calibration
     trials and the rest as evaluation trials.
@@ -74,6 +113,14 @@ def split_calibration_trials(
         seed: From `calibration_split_seed`, or any int -- callers that need
             the standard, reproducible grid should always go through that
             function rather than inventing their own seed.
+        dedup_sentences: If True, additionally DROP from the evaluation set
+            every trial whose sentence text also appears in the calibration
+            set (`split_off_sentence_overlap`). The calibration set is the
+            same either way for a given seed, so a dedup'd evaluation set is
+            always a subset of the non-dedup'd one -- and in that case the
+            two returned lists no longer partition `trial_ids` (the dropped
+            trials belong to neither). Default False keeps the original
+            trial-level-only behavior (what the Phase 3 grid used).
 
     Returns:
         `(calibration_trials, evaluation_trials)`, both lists of `TrialId`,
@@ -82,7 +129,9 @@ def split_calibration_trials(
         chosen by `random.Random(seed).sample`. The two lists partition
         `trial_ids` exactly: every element of `trial_ids` appears in
         exactly one of them, and neither list is ever empty when
-        `0 < n_calibration < len(trial_ids)`.
+        `0 < n_calibration < len(trial_ids)` (with `dedup_sentences=True` the
+        evaluation list can be shorter, or even empty if every remaining
+        sentence was also calibrated on -- callers must check).
 
     Raises:
         ValueError: If `n_calibration < 0`, or `n_calibration >=
@@ -106,6 +155,8 @@ def split_calibration_trials(
 
     calibration = [t for i, t in enumerate(trial_ids) if i in calibration_indices]
     evaluation = [t for i, t in enumerate(trial_ids) if i not in calibration_indices]
+    if dedup_sentences:
+        evaluation, _ = split_off_sentence_overlap(calibration, evaluation)
     return calibration, evaluation
 
 
