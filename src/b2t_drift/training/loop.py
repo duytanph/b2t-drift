@@ -339,6 +339,184 @@ def train_one_epoch(
     }
 
 
+def train_one_step_accumulated(
+    model: torch.nn.Module,
+    dataloader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: torch.nn.Module,
+    device: torch.device,
+    grad_clip: float = 1.0,
+    day_layer_penalty: float = 0.0,
+) -> dict[str, Any]:
+    """One optimizer step, with its gradient ACCUMULATED across every
+    microbatch `dataloader` yields -- mathematically identical to a single
+    full-batch forward/backward over all of `dataloader`'s trials at once,
+    but with peak activation memory bounded by the largest microbatch
+    rather than by the total trial count.
+
+    WHY THIS EXISTS (Phase 3, Arm 2/3a/3b). A "step" for these arms is
+    defined as one full-batch gradient step over all N calibration trials
+    (`docs/FINDINGS.md`: the N=100 recalibration-grid slowdown). At N=100,
+    padding every trial to the longest (up to 2,179 bins) and patching to
+    7,168 dims produces activations large enough to push this project's
+    8 GB GPU into WDDM's driver-level spill-to-system-RAM path (observed:
+    ~2.47 s/step at N=100 vs. ~0.093 s/step at N=10 -- a 26x slowdown for
+    10x the data). This function makes "one step over N trials" a matter
+    of ACCUMULATING gradient over ceil(N / microbatch_size) forward/backward
+    passes before ever calling `optimizer.step()` once -- same total
+    gradient, same resulting update, bounded peak memory.
+
+    THE MEAN-REDUCTION WEIGHTING PROBLEM, AND HOW IT'S HANDLED. `criterion`
+    is expected to be an `nn.CTCLoss` with its default `reduction="mean"`:
+    each microbatch's `criterion(...)` call returns `mean_{i in batch}
+    (raw_loss_i / target_length_i)`, a MEAN over however many trials
+    happen to be in THAT microbatch -- not over all `N` trials. Naively
+    summing these per-microbatch means and calling `.backward()` on each
+    would silently up-weight small (e.g. the last, partial) microbatches
+    and NOT reproduce the true full-batch mean's gradient. The fix: scale
+    each microbatch's loss by `(microbatch_size / N)` before calling
+    `.backward()` on it (gradients accumulate additively across multiple
+    `.backward()` calls with no intervening `optimizer.zero_grad()`, which
+    is exactly what "accumulation" means here). Since
+    `sum(microbatch_size / N for every microbatch) == 1` by construction
+    (every trial appears in exactly one microbatch), this reconstructs
+    precisely `grad(mean_{i in ALL N trials} (raw_loss_i / target_length_i))`
+    -- the same gradient a single full-batch call to `criterion` would have
+    produced. `tests/test_loop.py`'s accumulation-equivalence test verifies
+    this numerically against a real full-batch call on the same data,
+    rather than trusting the derivation alone.
+
+    `day_layer_penalty * model.day_layers.identity_penalty()` does NOT
+    depend on which trials are in the batch, only on the model's current
+    (fixed, since no step happens mid-accumulation) parameters -- so unlike
+    the CTC loss, it is added and backpropagated EXACTLY ONCE (after the
+    microbatch loop, not scaled/repeated per microbatch), which already
+    reproduces its exact full-step contribution.
+
+    INFINITE-LOSS DETECTION IS ALL-OR-NOTHING FOR THE WHOLE STEP, not
+    per-microbatch. If any microbatch's raw per-item loss is non-finite,
+    accumulating the OTHER microbatches' gradients and stepping anyway
+    would silently take a step from an incomplete gradient (the "full
+    step" this function promises never actually happened) -- worse than
+    `train_one_epoch`'s per-batch skip, since here "the batch" IS the
+    step. Detected the same way as `train_one_epoch` (a raw,
+    `zero_infinity=False`, `reduction="none"` CTC forward, purely for
+    detection); on the first bad microbatch, every gradient accumulated
+    so far this call is discarded (`optimizer.zero_grad()`) and the
+    function returns immediately with `stepped=False`, without processing
+    any remaining microbatches.
+
+    Args:
+        model, criterion, device: As in `train_one_epoch`.
+        dataloader: Yields microbatches (e.g. `batch_size=16`) covering
+            ALL trials this step should train on, in a fixed order
+            (`shuffle=False` -- order doesn't matter for a full-batch-
+            equivalent gradient, and a fixed order keeps this function
+            deterministic given a deterministic model). `dataloader.dataset`
+            must support `len()` (true of every `TrialDataset` in this
+            project) -- its length is `N`, the weighting denominator.
+        optimizer: Stepped exactly once per call (or zero times, if an
+            infinite loss is detected) -- construct a FRESH optimizer per
+            fit, same as every other Phase 3 arm (`DayLayers`' Adam
+            stale-state caveat).
+        grad_clip: Applied ONCE, after every microbatch's gradient has
+            been accumulated (and after the day-layer penalty's) -- the
+            same single clip a full-batch step would have applied, not
+            one clip per microbatch.
+        day_layer_penalty: Weight on `model.day_layers.identity_penalty()`,
+            added once as described above. `0.0` (default): no penalty, a
+            no-op identical to omitting it, matching `train_one_epoch`'s
+            own default.
+
+    Returns:
+        A dict with keys:
+          - `"loss"`: the full-batch-equivalent mean CTC loss (reconstructed
+            via the same weighted-sum trick as the gradient) PLUS the
+            day-layer penalty term, matching `train_one_epoch`'s
+            convention that its reported `"loss"` includes the penalty.
+            `nan` if the step was skipped (see `"stepped"` below).
+          - `"n_microbatches"`: how many microbatches `dataloader` yielded.
+          - `"n_inf_microbatches"`: `1` if the step was skipped due to a
+            non-finite microbatch, else `0` (never more than 1: detection
+            stops at the first bad microbatch rather than continuing to
+            count).
+          - `"grad_norm"`: `clip_grad_norm_`'s return value (the PRE-clip
+            total gradient norm across every accumulated microbatch), or
+            `nan` if the step was skipped.
+          - `"stepped"`: `True` if `optimizer.step()` was called, `False`
+            if the step was skipped (non-finite loss).
+          - `"seconds"`: wall-clock time for this call.
+    """
+    if isinstance(criterion, torch.nn.CTCLoss) and not criterion.zero_infinity:
+        warnings.warn(
+            "train_one_step_accumulated: criterion is an nn.CTCLoss with "
+            "zero_infinity=False. An infinite per-item loss will not be "
+            "zeroed by criterion itself; this function's own detection "
+            "pass still catches it and skips the step, but zero_infinity="
+            "True is expected for consistency with train_one_epoch.",
+            stacklevel=2,
+        )
+
+    model.train()
+    start = time.perf_counter()
+
+    total_trials = len(dataloader.dataset)
+    if total_trials == 0:
+        raise ValueError("train_one_step_accumulated: dataloader.dataset is empty.")
+
+    optimizer.zero_grad()
+
+    total_weighted_loss = 0.0
+    n_microbatches = 0
+    for raw_batch in dataloader:
+        n_microbatches += 1
+        batch = _move_batch_to_device(raw_batch, device)
+        batch_size = batch["features"].shape[0]
+        weight = batch_size / total_trials
+
+        log_probs = model(
+            batch["features"], batch["session_indices"], input_lengths=batch["input_lengths"],
+        )
+        ctc_lengths = model.ctc_input_lengths(batch["input_lengths"])
+
+        # Detection pass -- see this function's docstring on why a bad
+        # microbatch aborts the WHOLE step rather than being skipped alone.
+        with torch.no_grad():
+            raw_per_item_loss = torch.nn.functional.ctc_loss(
+                log_probs, batch["targets"], ctc_lengths, batch["target_lengths"],
+                blank=getattr(criterion, "blank", 0), reduction="none", zero_infinity=False,
+            )
+        if not torch.isfinite(raw_per_item_loss).all():
+            optimizer.zero_grad()  # discard whatever prior microbatches accumulated
+            return {
+                "loss": math.nan, "n_microbatches": n_microbatches, "n_inf_microbatches": 1,
+                "grad_norm": math.nan, "stepped": False, "seconds": time.perf_counter() - start,
+            }
+
+        loss = criterion(log_probs, batch["targets"], ctc_lengths, batch["target_lengths"])
+        (loss * weight).backward()
+        total_weighted_loss += loss.item() * weight
+
+    if day_layer_penalty > 0 and getattr(model, "day_layers", None) is not None:
+        penalty = day_layer_penalty * model.day_layers.identity_penalty()
+        penalty.backward()
+        total_weighted_loss += penalty.item()
+
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    stepped = math.isfinite(grad_norm)
+    if stepped:
+        optimizer.step()
+
+    return {
+        "loss": total_weighted_loss,
+        "n_microbatches": n_microbatches,
+        "n_inf_microbatches": 0,
+        "grad_norm": float(grad_norm) if stepped else math.nan,
+        "stepped": stepped,
+        "seconds": time.perf_counter() - start,
+    }
+
+
 def evaluate(
     model: torch.nn.Module,
     dataloader: DataLoader,

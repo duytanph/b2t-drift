@@ -8,6 +8,7 @@ Real-data tests are skipped if `data/raw/hdf5_data_final` is not present.
 
 from __future__ import annotations
 
+import copy
 import csv
 import json
 import math
@@ -17,14 +18,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from b2t_drift.data.collate import LengthBucketedSampler, collate_trials
 from b2t_drift.data.dataset import TrialDataset
 from b2t_drift.data.hdf5_io import iter_trial_ids
 from b2t_drift.models.gru_ctc import GRUCTC
 from b2t_drift.phonemes import BLANK_INDEX
-from b2t_drift.training.loop import evaluate, fit, train_one_epoch
+from b2t_drift.training.loop import evaluate, fit, train_one_epoch, train_one_step_accumulated
 
 DATA_ROOT = Path("data/raw/hdf5_data_final")
 SESSION_ID = "t15.2023.08.11"
@@ -532,3 +533,168 @@ def test_fit_stops_early_when_val_per_does_not_improve(tmp_path, monkeypatch) ->
     assert summary["final_epoch"] == 3
     assert summary["best_epoch"] == 1
     assert summary["best_val_per"] == 0.5
+
+
+# --- train_one_step_accumulated ------------------------------------------
+
+
+class _ListDataset(Dataset):
+    """Wraps a plain list of `TrialDataset`-shaped item dicts so
+    `train_one_step_accumulated` can read `len(dataloader.dataset)` --
+    no real HDF5 data needed, unlike `_build_dataloader` above."""
+
+    def __init__(self, items: list[dict]) -> None:
+        self._items = items
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getitem__(self, idx: int) -> dict:
+        return self._items[idx]
+
+
+def _synthetic_items(n: int, seed: int = 0) -> list[dict]:
+    """`n` synthetic trials, varying length, shaped exactly like
+    `TrialDataset.__getitem__`'s output -- short enough (15-30 timesteps,
+    3-5 target phonemes) to keep every CTC alignment trivially feasible at
+    `patch_size=1` (the tiny test model's default), so no item risks the
+    zero_infinity path this test isn't exercising."""
+    rng = torch.Generator().manual_seed(seed)
+    items = []
+    for i in range(n):
+        n_time_steps = 15 + 3 * (i % 6)
+        seq_len = 3 + (i % 3)
+        items.append({
+            "features": torch.randn(n_time_steps, 512, generator=rng),
+            "targets": torch.randint(1, 41, (seq_len,), generator=rng, dtype=torch.int64),
+            "n_time_steps": n_time_steps,
+            "seq_len": seq_len,
+            "session_index": 0,
+            "session_id": "synthetic",
+            "block_num": 1,
+            "trial_key": f"trial_{i:04d}",
+        })
+    return items
+
+
+def test_accumulated_gradient_matches_full_batch_gradient() -> None:
+    """The equivalence the whole function exists for: accumulating
+    gradient over several microbatches must reproduce the SAME gradient
+    (to float tolerance) as one full-batch forward/backward over the
+    identical trials -- verified numerically, not just derived. Uses an
+    independent, hand-written reference computation (not
+    train_one_step_accumulated called with one big microbatch), so this
+    doesn't just test the function against itself.
+    """
+    torch.manual_seed(0)
+    items = _synthetic_items(n=7)
+    device = torch.device("cpu")
+    criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
+
+    model_ref = GRUCTC(n_sessions=1, hidden_size=8, n_layers=1, dropout=0.0, use_day_layers=True)
+    model_acc = copy.deepcopy(model_ref)
+
+    # --- Independent reference: one plain full-batch forward/backward ---
+    batch = collate_trials(items)
+    log_probs = model_ref(batch["features"], batch["session_indices"], input_lengths=batch["input_lengths"])
+    ctc_lengths = model_ref.ctc_input_lengths(batch["input_lengths"])
+    ref_loss = criterion(log_probs, batch["targets"], ctc_lengths, batch["target_lengths"])
+    ref_loss.backward()
+    ref_grads = {name: p.grad.clone() for name, p in model_ref.named_parameters()}
+    assert all(g is not None for g in ref_grads.values())
+
+    # --- Accumulated: same 7 trials, split into microbatches of 3 (3+3+1) ---
+    loader = DataLoader(_ListDataset(items), batch_size=3, shuffle=False, collate_fn=collate_trials)
+    # lr=0 so optimizer.step() is a documented no-op -- this isolates the
+    # gradient-accumulation claim from any interaction with the update
+    # rule itself; grad_clip=1e6 keeps clipping a no-op too, since this
+    # tiny model/input's true gradient norm is far below that.
+    optimizer = torch.optim.SGD(model_acc.parameters(), lr=0.0)
+    result = train_one_step_accumulated(
+        model_acc, loader, optimizer, criterion, device, grad_clip=1e6,
+    )
+
+    assert result["stepped"] is True
+    assert result["n_microbatches"] == 3
+    assert result["n_inf_microbatches"] == 0
+    assert result["loss"] == pytest.approx(ref_loss.item(), abs=1e-5)
+
+    for name, ref_grad in ref_grads.items():
+        acc_grad = dict(model_acc.named_parameters())[name].grad
+        assert acc_grad is not None, f"{name} has no accumulated gradient"
+        torch.testing.assert_close(acc_grad, ref_grad, atol=1e-4, rtol=1e-3)
+
+
+def test_accumulated_gradient_matches_full_batch_with_day_layer_penalty() -> None:
+    """Same equivalence, with day_layer_penalty > 0 -- checks the penalty
+    term (added once, unscaled, after the microbatch loop) reproduces the
+    same total gradient as adding it once in a plain full-batch step."""
+    torch.manual_seed(1)
+    items = _synthetic_items(n=5, seed=1)
+    device = torch.device("cpu")
+    criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
+    penalty_weight = 50.0
+
+    model_ref = GRUCTC(
+        n_sessions=1, hidden_size=8, n_layers=1, dropout=0.0, use_day_layers=True,
+        day_layer_parameterization="diagonal",
+    )
+    model_acc = copy.deepcopy(model_ref)
+
+    batch = collate_trials(items)
+    log_probs = model_ref(batch["features"], batch["session_indices"], input_lengths=batch["input_lengths"])
+    ctc_lengths = model_ref.ctc_input_lengths(batch["input_lengths"])
+    ref_loss = criterion(log_probs, batch["targets"], ctc_lengths, batch["target_lengths"])
+    ref_loss = ref_loss + penalty_weight * model_ref.day_layers.identity_penalty()
+    ref_loss.backward()
+    ref_grads = {name: p.grad.clone() for name, p in model_ref.named_parameters() if p.grad is not None}
+
+    loader = DataLoader(_ListDataset(items), batch_size=2, shuffle=False, collate_fn=collate_trials)
+    optimizer = torch.optim.SGD(model_acc.parameters(), lr=0.0)
+    result = train_one_step_accumulated(
+        model_acc, loader, optimizer, criterion, device, grad_clip=1e6,
+        day_layer_penalty=penalty_weight,
+    )
+
+    assert result["n_microbatches"] == 3  # 2 + 2 + 1
+    assert result["loss"] == pytest.approx(ref_loss.item(), abs=1e-5)
+    for name, ref_grad in ref_grads.items():
+        acc_grad = dict(model_acc.named_parameters())[name].grad
+        assert acc_grad is not None, f"{name} has no accumulated gradient"
+        torch.testing.assert_close(acc_grad, ref_grad, atol=1e-4, rtol=1e-3)
+
+
+def test_accumulated_step_skipped_entirely_on_one_bad_microbatch() -> None:
+    """An infinite loss in ANY microbatch must discard gradient accumulated
+    from every OTHER microbatch too and skip the step -- a partial step
+    from an incomplete gradient would silently violate the "one full step"
+    contract this function makes."""
+    device = torch.device("cpu")
+    model = GRUCTC(n_sessions=1, hidden_size=8, n_layers=1, dropout=0.0, use_day_layers=False)
+    criterion = nn.CTCLoss(blank=BLANK_INDEX, zero_infinity=True)
+
+    good_items = _synthetic_items(n=2, seed=2)
+    # 10 consecutive repeats of the same label need a mandatory blank
+    # between every pair (minimum feasible input length 2*10-1=19) --
+    # n_time_steps=10 satisfies collate_trials's n_time_steps >= seq_len
+    # check but is still CTC-infeasible, giving an infinite raw loss.
+    bad_item = {
+        "features": torch.randn(10, 512),
+        "targets": torch.full((10,), 5, dtype=torch.int64),
+        "n_time_steps": 10, "seq_len": 10, "session_index": 0,
+        "session_id": "synthetic", "block_num": 1, "trial_key": "trial_bad",
+    }
+    items = good_items + [bad_item]
+
+    initial_params = {name: p.clone() for name, p in model.named_parameters()}
+    loader = DataLoader(_ListDataset(items), batch_size=1, shuffle=False, collate_fn=collate_trials)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1.0)  # lr=1 -> any real step would visibly move params
+
+    result = train_one_step_accumulated(model, loader, optimizer, criterion, device)
+
+    assert result["stepped"] is False
+    assert result["n_inf_microbatches"] == 1
+    assert math.isnan(result["loss"])
+    for name, p in model.named_parameters():
+        torch.testing.assert_close(p, initial_params[name])  # unchanged: no step, no leftover grad
+        assert p.grad is None or torch.all(p.grad == 0)
