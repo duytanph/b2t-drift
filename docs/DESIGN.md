@@ -18,8 +18,8 @@ strategies under a fixed budget of participant time.
 - **Measurement** — how fast does PER degrade with days since calibration?
 - **Attribution** — settled (section 6): SNR loss, tuning change, and
   subspace rotation confirmed and confounded; channel death ruled out.
-- **Decision** — given a fixed budget of new-day participant time, what's
-  the best use of it?
+- **Decision** — settled (section 5): full fine-tuning wins throughout;
+  recalibration slows decline but does not restore function.
 
 **Split:** train on an early block of sessions, swept at four cut points
 (1–5/1–10/1–15/1–20); evaluate each later session individually as a
@@ -100,43 +100,38 @@ common, easy mistake — keep them separate in every results table.
 ## 5. Recalibration strategies (Question 3 arms)
 
 Candidate interventions for the DECISION question, increasing order of
-participant-time cost.
+participant-time cost. Phase 3 split Arm 3 into 3a/3b below.
 
 | Arm | Labels needed | Targets | Notes |
 |---|---|---|---|
 | **0 — no adaptation (baseline)** | None | — | Day-0 calibrated decoder, unmodified. Zero participant time. This is what the drift curve itself measures. |
-| **1 — unsupervised distribution alignment** (e.g. CORAL, Procrustes) | None (unlabeled new-day data only) | Subspace rotation | If the population-activity manifold has rotated in 256-d space but per-channel marginals are already handled by the rolling z-score, a linear alignment from unlabeled data alone can in principle undo the rotation. |
-| **2 — new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | Structurally identical to the `day_weights`/`day_biases` layers found in the official checkpoint (`docs/FINDINGS.md`). More degrees of freedom than Arm 1; can partially compensate for a shifted phoneme-to-channel mapping. |
-| **3 — fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | Highest participant-time and compute cost. **Catastrophic-forgetting risk at small N**: too little new-day data and whole-network fine-tuning can overfit to the N calibration sentences, losing generalization the frozen-backbone arms would have kept. |
+| **1 — unsupervised distribution alignment** (CORAL, Procrustes) | None (unlabeled new-day data only) | Subspace rotation | Linear alignment fit from unlabeled new-day features alone. **REFUTED as a correction** — verdict below. |
+| **2 — new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | Structurally identical to the `day_weights`/`day_biases` layers in the official checkpoint (`docs/FINDINGS.md`). lr=1e-5, measured separately from Arm 3b's (`docs/FINDINGS.md`: "A learning rate measured for one arm does not transfer to another"). **CLOSED: insufficient capacity** — verdict below. |
+| **3a — output projection layer only** | N labeled sentences | Whatever a 41-class linear readout can absorb | Intermediate cost between Arm 2 and full fine-tune. lr=1e-4, also measured separately. |
+| **3b — fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | Highest cost, lr=1e-3. **Wins at every elapsed time measured** bar one exception — verdict below. Catastrophic-forgetting risk at small N on lightly-drifted sessions. |
 
 A fourth arm (recomputing per-session z-score statistics) is retired —
 the data already does this via a rolling per-channel z-score (`docs/DATASET.md` section 9 item 7).
 
-**Arm 2 uses the `"diagonal"` parameterization** (1,024 params/session)
-at `day_layer_penalty` λ=300 — kept because the best day-layer config
-reached val PER **0.16932** vs. **0.1697** for the best no-day-layer
-config, a **−0.0004** gap inside the pre-registered 0.03 keep/drop
-threshold (`docs/FINDINGS.md`: "Pre-committed rule for keeping or
-dropping day layers"). `"full"` (262,656 params/session) diverges when
-trained jointly and is kept only as an upper-bound comparison;
-`"lowrank"` is implemented, untested (`docs/FINDINGS.md`: "Day layers
-are unstable when trained jointly across many sessions").
+**Arm 2's day layer uses the `"diagonal"` parameterization at λ=300**
+(1,024 params/session; section 10 has the full justification) — nearly
+free to omit per-session: the identity-redirect control costs **−0.0038**
+PER on average vs. **+0.313** under `"full"` (`docs/FINDINGS.md`: "The
+identity-day-layer redirect control, repeated under diagonal day layers").
 
-**Per-session calibration is nearly free to omit under `"diagonal"`:**
-the identity-redirect control costs **−0.0038** PER on average, against
-**+0.313** under `"full"` (`docs/FINDINGS.md`: "The identity-day-layer
-redirect control, repeated under diagonal day layers"). Question 3 is
-therefore "how much accumulated drift can a small labeled budget
-recover, and at what elapsed time does it stop being sufficient" — not
-"does recalibration help immediately" (the +5-day held-out gap is only
-0.008 — `docs/FINDINGS.md`: "The cut-point sweep..."). Whether a
-diagonal fit on one drifted session recovers accumulated drift is open.
+**Recalibration verdict (Phase 3 complete):**
 
-**Arm 1's premise is no longer hypothetical**: subspace rotation is
-confirmed, large, and independent of channel health (3.05–3.17 deg/100d,
-tracking PER at ρ=0.908 — `docs/FINDINGS.md`: "Subspace rotation
-confirmed..."), giving Arm 1 a real, measured target rather than a
-hopeful premise.
+| Arm | Verdict | FINDINGS.md pointer |
+|---|---|---|
+| 1 — unsupervised alignment | **REFUTED** — benefit runs OPPOSITE to measured rotation magnitude (Procrustes, ρ=−0.9 to −1.0); CORAL shows nothing coherent. Rotation is a correlate of drift, not a correctable cause. | "Subspace rotation is a correlate of drift, not a correctable cause" |
+| 2 — day layer, backbone frozen | **CLOSED** — at a safe lr the layer barely leaves identity (max\|scale−1\|≈0.004); 1,024 params is enough to be stable under joint training, not enough to correct one new day | "A diagonal day layer lacks the capacity to correct accumulated drift" |
+| 3b — full fine-tune | **WINS** at every elapsed time measured except +9d at N=10 (worse than nothing there — a minimum viable budget exists below which recalibration is counterproductive) | "Full fine-tuning is the best use of a fixed participant-time budget...", "There is a minimum viable calibration budget..." |
+
+**Answer to Question 3:** spend the budget on full fine-tuning — it slows
+the PER decline but does not restore day-0 function, recovery-fraction
+falls in two sharp steps rather than smoothly, and a minimum viable
+budget exists below which recalibration hurts (`docs/FINDINGS.md`:
+"Recalibration slows the decline but does not restore function").
 
 ---
 
@@ -375,6 +370,11 @@ optimizer's first step, or use a fresh optimizer for that phase.
 - **SNR loss, tuning change, and subspace rotation are confirmed but
   cannot be separated or ranked by this design** (section 6; |ρ| 0.70–0.90
   inter-correlated).
+- **Recovery-fraction's reference (section 5) is validation PER inside
+  the training sessions, not a true day-zero session** — an optimistic
+  ceiling, so reported fractions are lower bounds; its 5-split sd reflects
+  calibration-subset variability only, and calibration/evaluation trials
+  are interleaved within a session, not temporally ordered.
 
 ---
 

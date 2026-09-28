@@ -1753,3 +1753,365 @@ which do not distinguish TX from SBP. Figure:
 verdict from the other direction: SNR loss alone cannot be the whole
 story, because a decoder built entirely from the feature that degrades
 least (SBP) is not thereby protected from drift.
+
+---
+
+### Full fine-tuning is the best use of a fixed participant-time budget, at every elapsed time measured (2026-09-23)
+
+**Question:** Of the four recalibration arms (0 — no adaptation, 1 —
+unsupervised alignment, 2 — day layer only, 3b — full fine-tune; 3a —
+output layer only, added as an intermediate-cost point), which recovers
+the most PER per minute of participant time, and does the answer change
+with elapsed time?
+
+**Method:** The recalibration grid: 5 evaluation sessions (+9/+42/+58/
++329/+597d), N in {0,10,25,50,100} calibration sentences, 5 random
+calibration/evaluation splits per (arm, session, N) cell, identical
+partitions across arms. `figures/recalibration_arms.png`;
+`results/recalibration_grid.csv`; `results/recalibration_summary.csv`.
+Sentence-de-duplicated PER (`docs/FINDINGS.md`: "Sentence-level leakage
+in the calibration split, and its effect") used throughout below.
+
+**Result:** Arm 3b (full fine-tune) wins every (session, N) cell **except
++9d at N=10**, where it is worse than doing nothing on 4/5 splits (mean
+PER 0.3892 vs. Arm 0's 0.3706) — see the companion entry on the minimum
+viable budget. Per-session recovery (mean PER over 5 splits; minutes =
+mean calibration time for that N):
+
+| Session | Arm 0 | N=10 (~2.6min) | N=25 (~7min) | N=50 (~14min) | N=100 (~27min) |
+|---|---|---|---|---|---|
+| +9d | 0.3706 | 0.3892 (worse) | 0.3335 | 0.3032 | 0.2753 |
+| +42d | 0.5779 | 0.5375 | 0.4632 | 0.4313 | 0.3754 |
+| +58d | 0.5549 | 0.5026 | 0.4426 | 0.3892 | impossible (83 trials) |
+| +329d | 0.7923 | 0.7683 | 0.7543 | 0.7342 | 0.7072 |
+| +597d | 0.7961 | 0.7733 | 0.7431 | 0.7182 | impossible (94 trials) |
+
+Arm 3b beats the best FREE option (min of Arm 0, 1a, 1b — i.e. doing
+nothing or aligning without labels) from N=10 (~2.5–3min) at +42d, +58d,
++329d, and +597d, and from N=25 at +9d. Arm 3a (output layer only) needs
+N=10–50 depending on session; Arm 2 (day layer only) needs N=100 or never
+beats it at all (fails outright at +329d — see "A diagonal day layer
+lacks the capacity to correct accumulated drift" below).
+
+**Consequence:** For this decoder and this drift regime, the DECISION
+question (`docs/DESIGN.md` section 4) has a single answer across the
+whole +9d–+597d range: spend the participant-time budget on full
+fine-tuning, not a cheaper partial arm — the intermediate arms' lower
+per-minute cost never translates into a per-minute PER advantage large
+enough to close the gap to Arm 3b. The one exception (+9d, N=10) is its
+own finding, below.
+
+---
+
+### Recalibration slows the decline but does not restore function (2026-09-28)
+
+**Question:** How much of the accumulated drift does the best arm (3b)
+actually recover, relative to what the decoder could achieve with no
+drift at all — and does that recovered share change with elapsed time?
+
+**Method:** `recovery_fraction = (Arm0_PER − Arm3b_PER) / (Arm0_PER −
+reference_PER)`, `reference_PER = 0.15765` — the s05 checkpoint's
+validation PER, measured WITHIN its own training sessions, not a
+held-out day-zero session. This makes `reference_PER` a slightly
+optimistic ceiling, so every fraction below is a LOWER BOUND on true
+recoverability. Computed on sentence-de-duplicated PER, at 5 calibration
+splits per cell, across 7 sessions: the original 5 (+9/+42/+58/+329/
++597d) plus two added specifically to close the +58d–+329d gap, +184d
+and +259d (`docs/FINDINGS.md`: "Task 1's gap-fill..." below).
+`figures/recalibration_recovery_fraction.png`;
+`results/recalibration_recovery_fraction.csv`.
+
+**Result:** Recovery fraction (mean ± sd over 5 splits), N=25/N=50:
+
+| Session | N=25 | N=50 |
+|---|---|---|
+| +9d | 16.8% ± 4.1 | 31.2% ± 3.3 |
+| +42d | 26.7% ± 4.0 | 35.3% ± 1.7 |
+| +58d | 28.4% ± 2.0 | 42.6% ± 5.4 (29 eval trials — too small to trust) |
+| +184d | 12.8% ± 1.7 | 19.5% ± 2.8 |
+| +259d | 12.8% ± 1.1 | 19.9% ± 2.7 |
+| +329d | 6.0% ± 1.9 | 9.3% ± 1.5 |
+| +597d | 8.2% ± 2.1 | 12.2% ± 1.1 |
+
+Descriptive regression on the 7 session means (labeled DESCRIPTIVE, not a
+fitted drift model): N=25 slope −3.14 points/100d (p=0.050); N=50 slope
+−4.86 points/100d (p=0.025). With the two gap-fill sessions added, these
+are significant where the original 5-session slopes were not (N=50 was
+p=0.074). The decline is NOT smooth: it happens in two sharp steps
+(+58d→+184d, and again +259d→+329d) separated by two flat plateaus
+(+9–+58d high, +184–+259d mid, +329–+597d low) — the steepest single step
+(+58d→+184d) accounts for −15.5 (N=25) / −23.1 (N=50) points of the total
+decline by itself.
+
+**Practical statement, with corrected (de-duplicated) numbers:** at
++597d, ~15 minutes of labeled speech buys PER 0.718 against Arm 0's
+0.796. At +329d, ~26 minutes buys 0.707 against 0.792 (headline
+unchanged by the leak correction — see the leak entry). Even the best
+cell measured (+9d, ~26 minutes: PER 0.275) only matches a +2d decoder's
+performance (0.277), not the 0.158 the same checkpoint reaches inside its
+own training sessions. Neither +329d nor +597d reaches PER 0.70 at any
+measured budget.
+
+**Consequence:** Recalibration (full fine-tuning) slows the PER decline;
+it does not restore day-0 function, at any tested budget, once drift has
+substantially accumulated. `docs/DESIGN.md` section 5's Question 3 answer
+is updated accordingly.
+
+---
+
+### There is a minimum viable calibration budget, and it depends on accumulated drift (2026-09-23)
+
+**Question:** Is more labeled data always at least as good as less, or can
+a small labeled budget make the decoder worse than doing nothing?
+
+**Method:** Same recalibration grid as above; recovery_fraction at N=10
+on the least-drifted session (+9d).
+
+**Result:** At +9d, N=10 gives recovery_fraction **−8.8% ± 7.1%** — ten
+labeled sentences on the EASIEST session make the decoder worse than no
+adaptation at all (4/5 splits). This is catastrophic forgetting appearing
+exactly where intuition says it should not: least drift, least to gain,
+most to lose. At +9d, N=25 is needed to break even (+16.8% ± 4.1%). At
++329d, by contrast, even N=10 helps (+3.8% ± 1.2%) — the same arm, same
+step count, same learning rate.
+
+**Consequence:** When Arm 0 is already close to the achievable floor for
+that session, 10 fine-tuning sentences carry more optimization noise than
+correctable signal, and full fine-tuning has enough capacity to overfit
+to that noise. The minimum viable calibration budget is not a fixed
+number of sentences — it depends on how much accumulated drift there is
+to correct. A recalibration protocol that always spends a small fixed
+budget (e.g. "10 sentences on every new day") would harm performance on
+early, lightly-drifted days.
+
+---
+
+### Subspace rotation is a correlate of drift, not a correctable cause (2026-09-23)
+
+**Question:** Phase 2 (`docs/FINDINGS.md`: "Subspace rotation confirmed,
+and it tracks PER as tightly as tuning change") found subspace rotation
+tracking PER at Spearman ρ=0.908 — the tightest relationship in the
+project — and `docs/DESIGN.md` section 5 concluded Arm 1's premise "is no
+longer hypothetical." Does correcting that rotation, without labels,
+actually recover the PER it predicts?
+
+**Method:** Arm 1a (CORAL) and Arm 1b (Procrustes) in the recalibration
+grid use only the calibration trials' FEATURES (no transcripts) to fit an
+unsupervised linear alignment, targeting exactly the rotation Phase 2
+measured. Correlated each arm's PER improvement over Arm 0 against that
+session's measured principal angle (`docs/FINDINGS.md`'s Phase 2 entry),
+across the grid's 5 sessions (3 at N=100).
+
+**Result:** Measured angles: 51.9° / 51.7° / 55.9° / 65.0° / 64.0° at
++9/+42/+58/+329/+597d. Arm 1b's improvement vs. angle: Spearman
+**−0.9 to −1.0** across N=10/25/50/100 — OPPOSITE of "more rotation, more
+benefit": Arm 1b gains +0.004 to +0.014 PER at ≤+58d (smaller angles) and
+LOSES −0.006 to −0.014 at +329d/+597d (larger angles). Arm 1a (CORAL)
+shows no coherent relationship (ρ≈−0.1 to 0) and is erratic in sign
+across sessions. At +597d, no unlabeled arm beats doing nothing. Arm 1's
+best measured gains (+0.004 to +0.014 PER) are an order of magnitude
+below Arm 3b's.
+
+**Reconciliation with Phase 2, stated explicitly:** these results are
+compatible, not contradictory. Rotation is a CORRELATE of drift, not a
+correctable CAUSE. Array micromotion through tissue plausibly produces
+both the coherent reorientation (rotation) and the information loss
+(reduced spike amplitude, altered neuron sampling — `docs/DESIGN.md`
+section 6) simultaneously, as two consequences of one physical process.
+Undoing the rotation does not restore the information, because the
+information was not lost BECAUSE OF the rotation. **General lesson: a
+measurement that predicts an outcome almost perfectly can still be
+useless as an intervention target** — prediction and correction are
+different claims, and confirming one does not confirm the other.
+
+**Caveat, stated honestly:** n=5 sessions (3 at N=100), and the measured
+angle is confounded with elapsed time (larger angles occur at later
+sessions) — the negative correlation could partly reflect "later
+sessions are harder for Arm 1 for any reason," not rotation specifically.
+The result is weak evidence on its own. It nonetheless directly
+contradicts the current DESIGN.md claim and is sufficient to withdraw it;
+`docs/DESIGN.md` section 5 is updated to reflect this.
+
+---
+
+### A diagonal day layer lacks the capacity to correct accumulated drift (2026-09-24)
+
+**Question:** `docs/DESIGN.md` section 5 (Phase 1) left open whether a
+dedicated diagonal day-layer fit on one heavily-drifted session — frozen
+backbone, no joint-training anchor from the other 44 sessions — has the
+capacity to recover accumulated drift.
+
+**Method:** Arm 2 in the recalibration grid, at a learning rate (1e-5)
+measured to be safe on the hardest session (`docs/FINDINGS.md`: "A
+learning rate measured for one arm does not transfer to another").
+Measured the fitted layer's own deviation from identity (`max|scale-1|`,
+the diagonal parameterization's only weight term) and swept
+`day_layer_penalty` λ over {30, 300, 3000} at this learning rate, at both
+N=10 and N=100.
+
+**Result:** At the safe learning rate, the fitted layer barely leaves
+identity: `max|scale-1| ≈ 0.004` at every λ tested, at both N=10 and
+N=100 (versus ≈0.09–0.10 at the old, unsafe lr=1e-3 — an order of
+magnitude more movement, and still constrained enough to be governed by
+lr rather than λ). λ is irrelevant across this 100x range at the safe lr:
+mean PER differs only in the 4th decimal between λ=30/300/3000.
+
+**Answer: no, 1,024 parameters is not enough.** It is enough to remain
+stable when trained jointly across 45 sessions (`docs/DESIGN.md` section
+10's day-layer keep/drop rule), and not enough to correct a single new,
+heavily-drifted day from a small labeled budget — the mechanism's own
+capacity is the limit, not the optimizer.
+
+**Caveat, stated honestly:** the safe learning rate was chosen
+specifically to avoid harm on the hardest session (+329d), so this
+capacity ceiling is measured at a THROTTLED setting — Arm 2 is further
+below its own best-case ceiling on easier sessions than this number
+suggests. At the old, unsafe lr=1e-3, Arm 2 on +42d reached PER
+improvements of +0.061 (N=10) and +0.106 (N=100), against the safe grid's
++0.0095 and +0.0178 there. Arm 3b still wins at +42d regardless (+0.040 /
++0.200), so the cross-arm ranking is unaffected — but "Arm 2 is a no-op"
+is a claim about a globally-safe learning rate, not a universal capacity
+limit independent of lr.
+
+---
+
+### A learning rate measured for one arm does not transfer to another (2026-09-24)
+
+**Question:** Arm 3b's learning rate (1e-3) was measured by a dedicated
+sweep specifically to avoid baking in a guessed value. That measured
+value was then reused, unmeasured, for Arm 2 (1,024 trainable parameters)
+and Arm 3a (21,033) — four and three orders of magnitude smaller than Arm
+3b's 16.6M. Does it still hold?
+
+**Method:** Diagnosed via Arm 2's behavior on the hardest session
+(+329d): first tested whether stronger identity-anchoring (λ) could fix
+an observed failure (the "too-weak regularization" hypothesis), then
+swept learning rate directly, then re-swept λ at the corrected rate.
+
+**Result:** No — it does not transfer, and the failure mode is
+specifically consistent with the anchor being overpowered, not with
+insufficient anchor strength. At lr=1e-3, N=10, sweeping λ over
+{30,300,3000}: the fitted layer's `max|scale-1|` landed at **0.0996 /
+0.0992 / 0.0918** — essentially unchanged across a 100x range — while the
+penalty's own share of the total loss rose from **0.16% to 9.41%**. The
+CTC gradient at this lr overpowers the identity anchor regardless of how
+hard the anchor pulls. Consequently, STRONGER anchoring made Arm 2's
++329d failure WORSE, not better (4/5, 4/5, 5/5 splits worse than Arm 0 at
+λ=30/300/3000 respectively) — the opposite of what the "too-weak
+regularization" hypothesis predicted, refuting it. Arm 3a was harmed too,
+in a different way: at lr≥1e-4, its N=10 improvement REVERSES between
+step 200 and step 400 (starts better than Arm 0, ends worse) — classic
+overfitting to a tiny calibration set, on the arm with 21,000 parameters
+to fit from 10 sentences.
+
+**Consequence:** A Task-1-style learning-rate sweep is required per arm,
+not per project — the whole point of measuring lr 1e-3 for Arm 3b was to
+avoid a guessed value, and that discipline was silently dropped the
+moment the value was reused elsewhere. Arm 2 and Arm 3a's final grid
+values (lr=1e-5/400 steps and lr=1e-4/200–400 steps respectively) were
+each measured the same way Arm 3b's was, on a middle session and verified
+on the pathological one, before being used for the grid
+(`docs/FINDINGS.md`: "A diagonal day layer lacks the capacity...").
+
+---
+
+### Sentence-level leakage in the calibration split, and its effect (2026-09-24)
+
+**Question:** The recalibration grid's stated protocol was "never
+evaluate on a calibration TRIAL." Is that the right unit of leakage?
+
+**Method:** Checked whether any evaluation trial's `sentence_label`
+(case/whitespace-normalized) also appeared among that same split's
+calibration trials, across every (session, N, split) cell in the grid.
+
+**Result:** No — the right unit is the SENTENCE, not the trial: the same
+sentence text can occur as two distinct trials within one session, so a
+model fine-tuned on one trial could be scored on the other and get credit
+for memorizing a phoneme sequence rather than decoding it. 32 of 90
+labeled cells were affected, all at +58d (13 cells) and +329d (19 cells);
+zero overlap at +9d, +42d, +597d. Overlap was 0.8–10.9% of eval trials
+per affected cell (mean 10.9% at +58d N=50; mean 5.5%, max 8.5%, at +329d
+N=100).
+
+Fitted weights for Arm 2/3a/3b were never saved during the grid run, so
+Arm 3a and Arm 3b were REFIT on the 32 affected cells (identical recipe)
+and each refit model scored on both the original and the
+sentence-de-duplicated evaluation set — isolating the leak's effect from
+ordinary refit-to-refit training noise (dropout is unseeded; two refits
+of the "same" cell differ by ≈0.001–0.003 PER on that basis alone). Arm
+0/1a/1b needed no refit (deterministic, dropout-off evaluation) and were
+re-scored exactly (recomputed full-eval PER matched the recorded grid
+values to 0.00e+00). Arm 2 was not refit — analytically unaffected, since
+a transform that stays within 0.004 of identity (see the capacity entry
+above) has no capacity to memorize a specific sentence's phoneme
+sequence.
+
+**Within-model leak effect on Arm 3b's improvement over Arm 0** (negative
+= the leak inflated it): +58d: −0.0037 / −0.0062 / −0.0066 (N=10/25/50);
++329d: −0.0004 / −0.0005 / −0.0005 / **+0.0014 (sd 0.0024)** (N=10/25/50/
+100). At +329d N=100 — the headline late-session cell — the effect is
+indistinguishable from zero: the "~26 minutes recovers 0.081 PER" claim
+becomes **0.0866** de-duplicated, unchanged in substance. At +58d the
+leak inflated Arm 3b by 0.004–0.007, small next to gains of 0.05–0.17
+there. Arm 1a/1b change by at most 0.0006 at +329d; Arm 3a by at most
+0.0004. One cell is too small to trust regardless of the leak: +58d,
+N=50, drops to 29 evaluation trials after de-duplication.
+
+**Prevention:** `split_calibration_trials` (`src/b2t_drift/evaluation/
+calibration.py`) gained an explicit `dedup_sentences` option
+(`split_off_sentence_overlap` does the work), covered by 6 new tests. The
+default remains `False` — the Phase 3 grid used `False` throughout, and
+that choice is now explicit and self-documented rather than an implicit
+gap in the stated protocol. `results/recalibration_grid.csv` gained
+`n_eval_overlap`, `n_eval_dedup`, `arm0_per_dedup`, `per_dedup`,
+`per_refit_full`, and `dedup_source` columns; every original column is
+byte-for-byte unchanged.
+
+**Consequence:** The Phase 3 headline (full fine-tuning wins at every
+elapsed time, and slows but does not restore function) survives
+unchanged. The protocol statement itself was wrong and is corrected here
+and in `docs/DESIGN.md`; any future N-vs-eval split in this codebase
+should default to asking whether sentence-level (not just trial-level)
+independence is required.
+
+---
+
+### Task 1's gap-fill: two intermediate sessions turn a descriptive slope into a significant one (2026-09-28)
+
+**Question:** The recovery-fraction curve had no measured session between
++58d and +329d — a 271-day window chosen by session selection, not a data
+limitation (s05 has passing sessions at +184d through +294d). Does
+filling it change the shape or the statistical support of "recovery
+falls with elapsed time"?
+
+**Method:** Ran Arm 3b (+ matched Arm 0, identical partition) at N=25 and
+N=50, 5 splits, on the two s05 passing sessions in +150d–+300d that
+maximize the minimum spacing among {+58d, x, y, +329d}: **+184d
+(t15.2024.02.25, 216 trials)** and **+259d (t15.2024.05.10, 135
+trials)** — spacings of 126/75/70 days, the most even split the available
+sessions (184/196/203/205/259/294d) allow. Same lr/step schedule and
+calibration-split seeds as the main grid. UNLIKE the main grid, used
+`dedup_sentences=True` for these new cells (recorded explicitly, per the
+prevention above) — measured overlap was 0% at both sessions, all N, all
+splits, so de-duplication changed nothing here in practice.
+
+**Result:** Recovery fraction at N=50: +184d 19.5% ± 2.8, +259d 19.9% ±
+2.7 — almost identical to each other, and roughly HALFWAY between the
++58d plateau (~36–43%) and the +329d/+597d plateau (~9–12%). With these
+two points added (7 sessions total, 3 at N=100), the N=25/N=50
+recovery-fraction slopes become statistically significant (p=0.050,
+p=0.025) where the original 5-session slopes were not (best: N=50,
+p=0.074). The decline is NOT smooth: essentially all of it happens in two
+sharp steps, +58d→+184d and +259d→+329d, separated by flat plateaus
+before, between, and after — not a continuous decay with elapsed time.
+40 new rows appended to `results/recalibration_grid.csv`, marked
+`is_gapfill=1`; all 545 pre-existing rows are byte-for-byte unchanged.
+`figures/recalibration_recovery_fraction.png` regenerated across all 7
+sessions.
+
+**Consequence:** The gap was worth filling — it changed a
+just-shy-of-significant descriptive slope into a significant one, and
+revealed that the underlying shape is step-wise, not smooth. Confirms
+`docs/FINDINGS.md`: "Recalibration slows the decline but does not restore
+function" with stronger statistical support and a corrected description
+of the curve's shape.

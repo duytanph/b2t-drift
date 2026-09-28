@@ -104,3 +104,13 @@ ruled out. All three confirmed mechanisms are inter-correlated
 (|ρ| 0.70–0.90) and cannot be ranked or separated by this design; see
 `docs/DESIGN.md` section 6 for the verdict and `docs/FINDINGS.md` for the
 measurements behind it.
+
+**Recalibration (Phase 3) is complete.** Full fine-tuning is the best use
+of a fixed participant-time budget at every elapsed time measured; it
+slows the PER decline but does not restore day-0 function, and there is a
+minimum viable calibration budget below which it is counterproductive.
+Unsupervised alignment (Arm 1) is refuted as a correction — subspace
+rotation predicts PER almost perfectly but is not a correctable cause —
+and a diagonal day layer (Arm 2) lacks the capacity to correct one
+drifted day. See `docs/DESIGN.md` section 5 for the verdict and
+`docs/FINDINGS.md` for the measurements behind it.
