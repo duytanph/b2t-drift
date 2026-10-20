@@ -1,9 +1,9 @@
-# Findings — the empirical record
+# Findings: the empirical record
 
 This file is the dated, append-only record of investigations and
 measurements behind `docs/DESIGN.md`'s decisions. It grows as
 investigations complete; entries are titled by **what was found**, never
-by task number, and are never rewritten in place — a later correction is
+by task number, and are never rewritten in place. A later correction is
 a new entry that cross-references the one it supersedes. Read
 `docs/DESIGN.md` for what is true now and why; come here when a specific
 claim needs to see the evidence behind it. Investigation scripts live in
@@ -19,19 +19,19 @@ committed under `figures/`.
 
 **Method:** A discreteness test (distinct-value count per column, which
 survives affine z-scoring) located the TX/SBP transition. A boundary-shift
-scan — testing all integer shifts of the three internal 64-wide
-boundaries from −16 to +16 against within- vs. across-block correlation —
+scan (testing all integer shifts of the three internal 64-wide
+boundaries from −16 to +16 against within- vs. across-block correlation)
 tested the array boundaries.
 
 **Result:** TX/SBP transition confirmed exactly at column 256 (columns
 0–255: ~0.6% as many distinct values as samples; 256–511: ~76%). 64-wide
 array boundaries (64/128/192) confirmed: the correlation gap peaks
 exactly at shift 0 (0.0129) vs. next-best neighbors (0.0127, 0.0125),
-falling off monotonically outward — the official README's literal
+falling off monotonically outward. The official README's literal
 0–64/65–128/... boundaries (off by one) are not supported. All 8
 hypothesized 64-wide blocks have per-column mean ≈ 0, variance ≈ 1
 (expected under normalization, not independent boundary evidence).
-Unplanned finding: `input_features` are already z-scored — every column
+Unplanned finding: `input_features` are already z-scored: every column
 mean ≈ 0, std ≈ 1, and TX columns repeat small sets of exact float
 values.
 
@@ -96,18 +96,18 @@ No OOM at batch 32 or 64 in any configuration (batch=64 peak 6.1 GB,
 baseline/fp32/no-downsampling). fp16 roughly halves step time (Turing has
 no native bf16). The official baseline's real architecture (patched
 input, GRU dim 7,168) is not directly comparable to this 512-dim grid.
-The fp16 timings above were measured without a `torch.amp.GradScaler` —
+The fp16 timings above were measured without a `torch.amp.GradScaler`:
 acceptable for a pure speed benchmark on random targets, but a real fp16
 training run needs one to avoid silent gradient underflow.
 
 **Consequence:** No GPU-driven reason to shrink the model or the
-four-cut-point sweep (`docs/DESIGN.md` section 7) — the sweep's real
+four-cut-point sweep (`docs/DESIGN.md` section 7). The sweep's real
 bottleneck turned out to be the dataloader, not GPU compute (see
 "Storage medium, not DataLoader configuration..." below). Confirmed
 `scripts/02_train.py` actually constructs a `GradScaler` whenever
 `amp: true` (the configured default,
 `configs/experiment/switchboard_baseline.yaml`) and `train_one_epoch`
-uses it to scale/unscale before clipping and stepping — this benchmark's
+uses it to scale/unscale before clipping and stepping: this benchmark's
 missing-GradScaler caveat does not apply to real training runs.
 
 ---
@@ -125,10 +125,10 @@ and inspected state_dict shapes and `args.yaml`.
 
 **Result:** (a) Median 6 blocks/session (range 3–11), median ~42
 trials/block (range ~22–50). Block count correlates negatively with
-session order (r = −0.40) — earlier sessions have more blocks
+session order (r = −0.40): earlier sessions have more blocks
 (`t15.2023.08.13`: 11) than later ones (many: 3–6).
 
-(b) `torch.load(weights_only=True)` failed (`UnpicklingError` —
+(b) `torch.load(weights_only=True)` failed (`UnpicklingError`:
 `numpy.core` renamed to `numpy._core`, breaking torch's safe-globals
 string match against the official file); fell back to
 `weights_only=False` for this specific, documented-source file. 5 GRU
@@ -137,7 +137,7 @@ model patches its input (`patch_size=14, patch_stride=4`, 14×512=7,168,
 stepped every 4 bins), matching the 80 ms real-time phoneme rate. Output
 size 41, confirming `ctc_output_size=41` independently. Per-session
 day-specific input layers confirmed present, as 45 separately-keyed
-tensors `day_weights.0..44` (512×512) and `day_biases.0..44` (1×512) —
+tensors `day_weights.0..44` (512×512) and `day_biases.0..44` (1×512),
 not found via a naive "first dim == 45" heuristic. `args.yaml` confirms
 `dataset.sessions` lists all 45 sessions; `dataset_probability_val`'s 4
 zero-flagged sessions match the 4 known train-only sessions. Checkpoint's
@@ -165,7 +165,7 @@ sessions spanning the recording.
 **Result:** Per-block: rejected (5th–95th percentile spread ~0.06 across
 columns; an exact per-block fit would be ~1e-6). Per-session: tighter but
 not confirmed (~0.019–0.026 spread, still an order of magnitude above
-float precision). Global: no predicted trend materialized — 6
+float precision). Global: no predicted trend materialized. 6
 representative columns across 12 sessions over 20 months stay within
 ±0.08 of zero with no monotonic drift
 (`figures/normalization_unit_check.png`). Confirmed via the official
@@ -201,7 +201,7 @@ lattice either (0/108 cases), confirming the method isn't simply broken.
 
 **Consequence:** Stopped rather than report a spurious mu/sigma.
 Explained in full once author correspondence confirmed a different
-divisor per SENTENCE (a rolling window) — no shared per-block or
+divisor per SENTENCE (a rolling window): no shared per-block or
 per-session lattice could ever have existed (`docs/DATASET.md` section 9
 item 7).
 
@@ -214,7 +214,7 @@ trials (≥50) to be usable eval points?
 
 **Method:** Rebuilt the viability table using per-(session, block) trial
 counts read directly from HDF5 (train+val partitions), joined to the
-CSV's block-level corpus label — the method the next entry shows is
+CSV's block-level corpus label: the method the next entry shows is
 necessary.
 
 **Result:** 17 of 30 held-out sessions survive (down from an earlier,
@@ -242,7 +242,7 @@ counts, 265 (session, block, split) rows, the same granularity the CSV
 itself reports.
 
 **Result:** Disagreement goes both directions (30 rows CSV > actual,
-+249 excess; 4 rows actual > CSV, −35; net +214) — a "QC drops during
++249 excess; 4 rows actual > CSV, −35; net +214): a "QC drops during
 packaging" explanation predicts only one direction and is incomplete.
 Roughly proportional to corpus/partition size, not concentrated
 (Switchboard: 24/34 mismatched rows, 174/214 of the discrepancy, close to
@@ -250,8 +250,8 @@ its ~69% trial-count base rate). Mismatched blocks skew smaller (mean
 32.7 actual trials vs. 42.6 matched) with several suspicious round-number
 mismatches (±10, ±5) in both directions. Worked example
 (`t15.2023.11.03`): CSV lists block 6 as 50 Switchboard sentences; actual
-HDF5 block 6 has 50 trials total across val+test **combined** (25 each)
-— the CSV's 50 is right for the block, but only 25 are in the labeled
+HDF5 block 6 has 50 trials total across val+test **combined** (25 each):
+the CSV's 50 is right for the block, but only 25 are in the labeled
 (val) partition. Confirms partition misattribution as a real, not just
 hypothesized, contributor (doesn't explain every mismatch; packaging
 drops remain plausible for the remainder). 0/265 blocks had a missing
@@ -271,21 +271,21 @@ PASS/FAIL calls.
 released, normalized `input_features`?
 
 **Method:** Per-channel minima distributions (TX vs. SBP) checked
-separately, then an exact per-(sentence, channel) lattice test — since
+separately, then an exact per-(sentence, channel) lattice test. Since
 normalization is per-sentence, each sentence has exactly one divisor per
 channel, unlike a whole block. Tested on 30 trials × 8 TX channels = 240
 pairs (501 trials sampled across 3 sessions).
 
 **Result:** TX and SBP per-channel minima are different distributions
-(TX median −0.85, range to −1.44; SBP median −2.12, range to −3.51) — a
+(TX median −0.85, range to −1.44; SBP median −2.12, range to −3.51). A
 previously-cited global minimum of −3.5107 is an SBP column (278), not
 TX, so a Poisson spike-count inversion never applied to it. Every TX
-channel's minimum recurs >100 times (median 13,207) — plateaus, not
+channel's minimum recurs >100 times (median 13,207): plateaus, not
 one-off outliers, consistent with genuine zero-count bins. The
 per-sentence lattice is confirmed in 230/240 (95.8%) of tested pairs,
 giving an exact recovered sigma per sentence and channel (median 0.56,
 range 0.23–0.88). Exact recovery: `sigma = 1/spacing`,
-`mu = -min*sigma`, `raw = released*sigma + mu` — median implied firing
+`mu = -min*sigma`, `raw = released*sigma + mu`: median implied firing
 rate ~24 Hz. A cruder pooled-minimum-plus-Poisson approximation (median
 ~36 Hz, 83.2% of channels in the 20–100 Hz plausible range) disagrees by
 ~1.5x and is conceptually unsound (it averages over many
@@ -317,7 +317,7 @@ counts directly from the written manifests.
 | s15 all-corpora | 2023-10-15 | 3,571 | 398 | 30 | 30 | +5 to +546 |
 
 The 17 passing s01–s15 day-offsets are exactly: 5, 7, 133, 145, 152, 154,
-208, 243, 278, 280, 287, 453, 455, 516, 518, 532, 546 — a **126-day hole
+208, 243, 278, 280, 287, 453, 455, 516, 518, 532, 546: a **126-day hole
 between +7 and +133** (the "frequent words" corpus era, which doesn't
 clear the 50-Switchboard-trial threshold at this cut). s01–s20 is poor
 value: +186 training trials (5.9%) over s01–s15, for −5 eval sessions and
@@ -338,7 +338,7 @@ everywhere this cost is mentioned.
 **Question:** How will the primary cut point be chosen, decided before
 any PER value exists?
 
-**Method:** N/A — a decision, recorded in advance per the validation-set
+**Method:** N/A. A decision, recorded in advance per the validation-set
 rule (`docs/DESIGN.md` section 7), before any PER had been computed on
 any of the five manifests above.
 
@@ -351,7 +351,7 @@ report the corpus confound as a stated limitation rather than
 restricting evaluation.
 
 **Consequence:** Binds the eventual primary-cut selection. Recording the
-rule before seeing any PER — not after — is what makes the selection
+rule before seeing any PER (not after) is what makes the selection
 principled rather than a post-hoc rationalization of whichever cut looks
 best.
 
@@ -436,32 +436,32 @@ from a synthetic benchmark?
 
 **Method:** Two rounds of synthetic DataLoader benchmarking, then a real
 measurement on the full 3,150-trial `temporal_s01_s15_switchboard` train
-set (3 real epochs, `num_workers` in {0, 1, 2, 4}) — first on the
+set (3 real epochs, `num_workers` in {0, 1, 2, 4}), first on the
 original spinning disk, then again after the dataset was moved to an
 SSD.
 
-**Result:** Round 1 (200 synthetic items) picked `num_workers=0` —
-wrong: Windows `spawn` worker-startup overhead swamped the signal at
+**Result:** Round 1 (200 synthetic items) picked `num_workers=0`:
+wrong. Windows `spawn` worker-startup overhead swamped the signal at
 that scale. Round 2 (2,048 synthetic fixed-length items) measured 35
 ms/batch at `num_workers=2`, concluding it cleared the ~230 ms/step fp16
-compute budget — also wrong at real scale: that same config still spent
+compute budget: also wrong at real scale, since that same config still spent
 74% of steady-state epoch time waiting on the dataloader (217.4s of
 292.8s). Disk read before/after the storage change: 70–93 ms/trial vs.
 4.43 ms/trial, 371.7 MB/s. Steady-state epoch time at `num_workers=2`
 before/after: 292.8s at 74% wait vs. 41.9s at under 1% wait. Post-move
 `num_workers` comparison (3rd epoch): 0 → 62.33s (24.8% wait), 1 →
-42.92s (0.9%), 2 → 41.86s (0.9%), 4 → 43.12s (1.6%) — 1/2/4 effectively
+42.92s (0.9%), 2 → 41.86s (0.9%), 4 → 43.12s (1.6%): 1/2/4 effectively
 tied, 0 slower because loading and compute no longer overlap. Peak GPU
 memory unchanged at 1749.7 MB across every configuration.
 
-**Consequence:** A benchmark must reproduce the real access pattern —
-many distinct files, real variable lengths, no page-cache reuse — or it
+**Consequence:** A benchmark must reproduce the real access pattern
+(many distinct files, real variable lengths, no page-cache reuse) or it
 measures something else; both synthetic rounds passed a scale test but
 failed the access-pattern test. `num_workers=2` is the config default;
 I/O is no longer the bottleneck at any `num_workers >= 1`, so no further
 (e.g. packed-cache) dataloader work is needed. Extrapolating the
 `num_workers=2` rate linearly by train-batch count across all four cut
-points: 3.50h for 100 epochs of every cut point, summed — superseding
+points: 3.50h for 100 epochs of every cut point, summed, superseding
 the earlier 18.76–25.50h estimate and the original GPU-compute-only
 "~6 hours" estimate.
 
@@ -477,7 +477,7 @@ inside a larger batch, before and after training (`DayLayers`' bias moves
 off its zero-init once trained).
 
 **Result:** Before fix: 0.0755 max absolute `log_probs` difference for a
-trained model — large enough to flip a marginal argmax. Mechanism:
+trained model, large enough to flip a marginal argmax. Mechanism:
 `DayLayers` runs on the batch's zero-padded region too; once its bias is
 nonzero, a padded timestep evaluates to `bias` (not zero), which
 `_smooth`'s Gaussian convolution then mixes into the last ~6 real
@@ -657,7 +657,7 @@ entry would otherwise reasonably suspect the opposite.
 
 ### The confounded substitution rate and its correction (2026-09-09)
 
-**SUPERSEDED by "Substitution rate among emitted phonemes rises under the settled architecture — the old flatness was a ceiling artifact" (2026-09-11).** The flat-slope conclusion below was measured on the old architecture (val PER 0.353); under the settled architecture the slope rises. The methodological correction in this entry (substitution rate must be normalized against commitments, not reference length) is NOT superseded and still stands — see the new entry for what changed and what didn't.
+**SUPERSEDED by "Substitution rate among emitted phonemes rises under the settled architecture: the old flatness was a ceiling artifact" (2026-09-11).** The flat-slope conclusion below was measured on the old architecture (val PER 0.353); under the settled architecture the slope rises. The methodological correction in this entry (substitution rate must be normalized against commitments, not reference length) is NOT superseded and still stands. See the new entry for what changed and what didn't.
 
 **Question:** Deletion rate rose `+0.049`/100d while (reference-length-
 normalized) substitution rate FELL `-0.021`/100d across the 22-session
@@ -698,7 +698,7 @@ output, not a one-off recomputation.
 
 ### The effective-signal control: the drift curve stops measuring degradation partway through (2026-09-09)
 
-**SUPERSEDED by "Effective signal does not collapse under the settled architecture" (2026-09-11).** The collapse-by-+75d / statistically-zero-by-+453d conclusion below was measured on the old architecture (val PER 0.353); under the settled architecture (val PER 0.169) effective signal never reaches statistical zero in three of the four cut points. The control ITSELF, and the reasoning for why raw PER cannot substitute for it, are NOT superseded — see the new entry for what changed and why the control still mattered.
+**SUPERSEDED by "Effective signal does not collapse under the settled architecture" (2026-09-11).** The collapse-by-+75d / statistically-zero-by-+453d conclusion below was measured on the old architecture (val PER 0.353); under the settled architecture (val PER 0.169) effective signal never reaches statistical zero in three of the four cut points. The control ITSELF, and the reasoning for why raw PER cannot substitute for it, are NOT superseded. See the new entry for what changed and why the control still mattered.
 
 **Question:** At +546 days, real-feature PER (0.857) and shuffled-feature
 PER (0.869, features replaced with a length-compatible donor trial from
@@ -768,7 +768,7 @@ LARGER than the observed 18-month drift itself.
 
 ### The full 22-session drift curve: rapid early rise, then a flat plateau (2026-09-09)
 
-**SUPERSEDED by "The full drift curve under the settled architecture: steeper rise, same shape" (2026-09-11).** The specific numbers below (absolute change, slope, segment slopes) were measured on the old architecture (val PER 0.353) and are superseded by larger values under the settled architecture. The step-then-plateau SHAPE conclusion is NOT superseded — it survives and is now confirmed independently across three separately-trained models, not just this one.
+**SUPERSEDED by "The full drift curve under the settled architecture: steeper rise, same shape" (2026-09-11).** The specific numbers below (absolute change, slope, segment slopes) were measured on the old architecture (val PER 0.353) and are superseded by larger values under the settled architecture. The step-then-plateau SHAPE conclusion is NOT superseded: it survives and is now confirmed independently across three separately-trained models, not just this one.
 
 **Question:** What does the s15 checkpoint's PER actually look like
 across all 22 evaluable held-out sessions (not just the 2 endpoints), and
@@ -1014,10 +1014,10 @@ entirely was stable and slightly better still on PER.
 
 | # | config | best val PER (epoch) | converged? | final PER @149 | train-loss trend @149 | grad_norm_mean @149 | day-layer `mean|W−I| / max|W−I|` @149 | wall clock |
 |---|---|---|---|---|---|---|---|---|
-| 1 | patch, no day layers | **0.1697 (102)** | yes | 0.1803 | flat (mild rise) | 1.66 | — | 35.9 min |
+| 1 | patch, no day layers | **0.1697 (102)** | yes | 0.1803 | flat (mild rise) | 1.66 | n/a | 35.9 min |
 | 2 | patch, `"diagonal"` day layers, λ300 | **0.16932 (106)** | yes | 0.1776 | flat (mild rise) | 1.85 | 0.0098 / 0.0410 | 40.2 min |
 | 3 | patch, `"full"` day layers, λ3000 | 0.2509 (38) | best early, then **diverges** | 0.3317 | **rising** (1.4→3.5 from ep25) | 10.70 | 0.1481 / 0.5919 | 42.1 min |
-| 4 | no patch, no day layers | 0.19575 (147) | **no — best in last 10%, upper bound** | 0.1990 | flat | 2.06 | — | 61.6 min |
+| 4 | no patch, no day layers | 0.19575 (147) | **no, best in last 10%, upper bound** | 0.1990 | flat | 2.06 | n/a | 61.6 min |
 
 Reading the table: (a) `"diagonal"` day layers (run 2, 1,024
 params/session) train to full PER parity with a no-day-layer model
@@ -1087,23 +1087,23 @@ confirmed byte-identical (sha256) before and after.
 
 **Result:** Average difference (identity minus trained) across the 3
 sessions: **−0.0038** (individually: `t15.2023.09.03` −0.0011,
-`t15.2023.09.01` −0.0020, `t15.2023.08.20` −0.0084) — essentially zero,
+`t15.2023.09.01` −0.0020, `t15.2023.08.20` −0.0084): essentially zero,
 and if anything slightly *negative* (identity is marginally better than
 the trained slice, within noise). The trained diagonal slices barely
 leave identity in the first place: `max|scale−1|` ranges 0.024–0.026,
-`max|bias|` ranges 0.024–0.031 across the three sessions — an order of
+`max|bias|` ranges 0.024–0.031 across the three sessions: an order of
 magnitude smaller than the old `"full"` architecture's per-session
 deviations.
 
 **Consequence:** **With diagonal day layers, per-session calibration is
-close to unnecessary** — a trained slice changes its own session's PER
+close to unnecessary**: a trained slice changes its own session's PER
 by essentially nothing. This is a substantive finding about BCI
 calibration practice (`docs/DESIGN.md` section 5): constraining the
 per-session correction to per-channel scaling makes the day layer nearly
 free to omit, and the old `+0.313` figure was a property of the more
 expressive `"full"` parameterization's capacity to memorize a session,
 not evidence that per-session correction is inherently valuable. This
-directly reframes Question 3 — see `docs/DESIGN.md` section 5 for the
+directly reframes Question 3. See `docs/DESIGN.md` section 5 for the
 revised framing and the open question it leaves for Arm 2's own
 single-session, frozen-backbone fitting regime, which this
 joint-training measurement does not settle either way.
@@ -1758,8 +1758,8 @@ least (SBP) is not thereby protected from drift.
 
 ### Full fine-tuning is the best use of a fixed participant-time budget, at every elapsed time measured (2026-09-23)
 
-**Question:** Of the four recalibration arms (0 — no adaptation, 1 —
-unsupervised alignment, 2 — day layer only, 3b — full fine-tune; 3a —
+**Question:** Of the four recalibration arms (0: no adaptation, 1:
+unsupervised alignment, 2: day layer only, 3b: full fine-tune; 3a:
 output layer only, added as an intermediate-cost point), which recovers
 the most PER per minute of participant time, and does the answer change
 with elapsed time?
@@ -1774,7 +1774,7 @@ in the calibration split, and its effect") used throughout below.
 
 **Result:** Arm 3b (full fine-tune) wins every (session, N) cell **except
 +9d at N=10**, where it is worse than doing nothing on 4/5 splits (mean
-PER 0.3892 vs. Arm 0's 0.3706) — see the companion entry on the minimum
+PER 0.3892 vs. Arm 0's 0.3706). See the companion entry on the minimum
 viable budget. Per-session recovery (mean PER over 5 splits; minutes =
 mean calibration time for that N):
 
@@ -1786,17 +1786,17 @@ mean calibration time for that N):
 | +329d | 0.7923 | 0.7683 | 0.7543 | 0.7342 | 0.7072 |
 | +597d | 0.7961 | 0.7733 | 0.7431 | 0.7182 | impossible (94 trials) |
 
-Arm 3b beats the best FREE option (min of Arm 0, 1a, 1b — i.e. doing
+Arm 3b beats the best FREE option (min of Arm 0, 1a, 1b, i.e. doing
 nothing or aligning without labels) from N=10 (~2.5–3min) at +42d, +58d,
 +329d, and +597d, and from N=25 at +9d. Arm 3a (output layer only) needs
 N=10–50 depending on session; Arm 2 (day layer only) needs N=100 or never
-beats it at all (fails outright at +329d — see "A diagonal day layer
+beats it at all (fails outright at +329d; see "A diagonal day layer
 lacks the capacity to correct accumulated drift" below).
 
 **Consequence:** For this decoder and this drift regime, the DECISION
 question (`docs/DESIGN.md` section 4) has a single answer across the
 whole +9d–+597d range: spend the participant-time budget on full
-fine-tuning, not a cheaper partial arm — the intermediate arms' lower
+fine-tuning, not a cheaper partial arm: the intermediate arms' lower
 per-minute cost never translates into a per-minute PER advantage large
 enough to close the gap to Arm 3b. The one exception (+9d, N=10) is its
 own finding, below.
@@ -1807,10 +1807,10 @@ own finding, below.
 
 **Question:** How much of the accumulated drift does the best arm (3b)
 actually recover, relative to what the decoder could achieve with no
-drift at all — and does that recovered share change with elapsed time?
+drift at all, and does that recovered share change with elapsed time?
 
 **Method:** `recovery_fraction = (Arm0_PER − Arm3b_PER) / (Arm0_PER −
-reference_PER)`, `reference_PER = 0.15765` — the s05 checkpoint's
+reference_PER)`, `reference_PER = 0.15765`: the s05 checkpoint's
 validation PER, measured WITHIN its own training sessions, not a
 held-out day-zero session. This makes `reference_PER` a slightly
 optimistic ceiling, so every fraction below is a LOWER BOUND on true
@@ -1827,7 +1827,7 @@ and +259d (`docs/FINDINGS.md`: "Task 1's gap-fill..." below).
 |---|---|---|
 | +9d | 16.8% ± 4.1 | 31.2% ± 3.3 |
 | +42d | 26.7% ± 4.0 | 35.3% ± 1.7 |
-| +58d | 28.4% ± 2.0 | 42.6% ± 5.4 (29 eval trials — too small to trust) |
+| +58d | 28.4% ± 2.0 | 42.6% ± 5.4 (29 eval trials, too small to trust) |
 | +184d | 12.8% ± 1.7 | 19.5% ± 2.8 |
 | +259d | 12.8% ± 1.1 | 19.9% ± 2.7 |
 | +329d | 6.0% ± 1.9 | 9.3% ± 1.5 |
@@ -1839,14 +1839,14 @@ fitted drift model): N=25 slope −3.14 points/100d (p=0.050); N=50 slope
 are significant where the original 5-session slopes were not (N=50 was
 p=0.074). The decline is NOT smooth: it happens in two sharp steps
 (+58d→+184d, and again +259d→+329d) separated by two flat plateaus
-(+9–+58d high, +184–+259d mid, +329–+597d low) — the steepest single step
+(+9–+58d high, +184–+259d mid, +329–+597d low): the steepest single step
 (+58d→+184d) accounts for −15.5 (N=25) / −23.1 (N=50) points of the total
 decline by itself.
 
 **Practical statement, with corrected (de-duplicated) numbers:** at
 +597d, ~15 minutes of labeled speech buys PER 0.718 against Arm 0's
 0.796. At +329d, ~26 minutes buys 0.707 against 0.792 (headline
-unchanged by the leak correction — see the leak entry). Even the best
+unchanged by the leak correction; see the leak entry). Even the best
 cell measured (+9d, ~26 minutes: PER 0.275) only matches a +2d decoder's
 performance (0.277), not the 0.158 the same checkpoint reaches inside its
 own training sessions. Neither +329d nor +597d reaches PER 0.70 at any
@@ -1867,19 +1867,19 @@ a small labeled budget make the decoder worse than doing nothing?
 **Method:** Same recalibration grid as above; recovery_fraction at N=10
 on the least-drifted session (+9d).
 
-**Result:** At +9d, N=10 gives recovery_fraction **−8.8% ± 7.1%** — ten
+**Result:** At +9d, N=10 gives recovery_fraction **−8.8% ± 7.1%**: ten
 labeled sentences on the EASIEST session make the decoder worse than no
 adaptation at all (4/5 splits). This is catastrophic forgetting appearing
 exactly where intuition says it should not: least drift, least to gain,
 most to lose. At +9d, N=25 is needed to break even (+16.8% ± 4.1%). At
-+329d, by contrast, even N=10 helps (+3.8% ± 1.2%) — the same arm, same
++329d, by contrast, even N=10 helps (+3.8% ± 1.2%): the same arm, same
 step count, same learning rate.
 
 **Consequence:** When Arm 0 is already close to the achievable floor for
 that session, 10 fine-tuning sentences carry more optimization noise than
 correctable signal, and full fine-tuning has enough capacity to overfit
 to that noise. The minimum viable calibration budget is not a fixed
-number of sentences — it depends on how much accumulated drift there is
+number of sentences: it depends on how much accumulated drift there is
 to correct. A recalibration protocol that always spends a small fixed
 budget (e.g. "10 sentences on every new day") would harm performance on
 early, lightly-drifted days.
@@ -1890,8 +1890,8 @@ early, lightly-drifted days.
 
 **Question:** Phase 2 (`docs/FINDINGS.md`: "Subspace rotation confirmed,
 and it tracks PER as tightly as tuning change") found subspace rotation
-tracking PER at Spearman ρ=0.908 — the tightest relationship in the
-project — and `docs/DESIGN.md` section 5 concluded Arm 1's premise "is no
+tracking PER at Spearman ρ=0.908 (the tightest relationship in the
+project), and `docs/DESIGN.md` section 5 concluded Arm 1's premise "is no
 longer hypothetical." Does correcting that rotation, without labels,
 actually recover the PER it predicts?
 
@@ -1904,7 +1904,7 @@ across the grid's 5 sessions (3 at N=100).
 
 **Result:** Measured angles: 51.9° / 51.7° / 55.9° / 65.0° / 64.0° at
 +9/+42/+58/+329/+597d. Arm 1b's improvement vs. angle: Spearman
-**−0.9 to −1.0** across N=10/25/50/100 — OPPOSITE of "more rotation, more
+**−0.9 to −1.0** across N=10/25/50/100: OPPOSITE of "more rotation, more
 benefit": Arm 1b gains +0.004 to +0.014 PER at ≤+58d (smaller angles) and
 LOSES −0.006 to −0.014 at +329d/+597d (larger angles). Arm 1a (CORAL)
 shows no coherent relationship (ρ≈−0.1 to 0) and is erratic in sign
@@ -1916,17 +1916,17 @@ below Arm 3b's.
 compatible, not contradictory. Rotation is a CORRELATE of drift, not a
 correctable CAUSE. Array micromotion through tissue plausibly produces
 both the coherent reorientation (rotation) and the information loss
-(reduced spike amplitude, altered neuron sampling — `docs/DESIGN.md`
+(reduced spike amplitude, altered neuron sampling; `docs/DESIGN.md`
 section 6) simultaneously, as two consequences of one physical process.
 Undoing the rotation does not restore the information, because the
 information was not lost BECAUSE OF the rotation. **General lesson: a
 measurement that predicts an outcome almost perfectly can still be
-useless as an intervention target** — prediction and correction are
+useless as an intervention target.** Prediction and correction are
 different claims, and confirming one does not confirm the other.
 
 **Caveat, stated honestly:** n=5 sessions (3 at N=100), and the measured
 angle is confounded with elapsed time (larger angles occur at later
-sessions) — the negative correlation could partly reflect "later
+sessions): the negative correlation could partly reflect "later
 sessions are harder for Arm 1 for any reason," not rotation specifically.
 The result is weak evidence on its own. It nonetheless directly
 contradicts the current DESIGN.md claim and is sufficient to withdraw it;
@@ -1937,8 +1937,8 @@ contradicts the current DESIGN.md claim and is sufficient to withdraw it;
 ### A diagonal day layer lacks the capacity to correct accumulated drift (2026-09-24)
 
 **Question:** `docs/DESIGN.md` section 5 (Phase 1) left open whether a
-dedicated diagonal day-layer fit on one heavily-drifted session — frozen
-backbone, no joint-training anchor from the other 44 sessions — has the
+dedicated diagonal day-layer fit on one heavily-drifted session (frozen
+backbone, no joint-training anchor from the other 44 sessions) has the
 capacity to recover accumulated drift.
 
 **Method:** Arm 2 in the recalibration grid, at a learning rate (1e-5)
@@ -1951,7 +1951,7 @@ N=10 and N=100.
 
 **Result:** At the safe learning rate, the fitted layer barely leaves
 identity: `max|scale-1| ≈ 0.004` at every λ tested, at both N=10 and
-N=100 (versus ≈0.09–0.10 at the old, unsafe lr=1e-3 — an order of
+N=100 (versus ≈0.09–0.10 at the old, unsafe lr=1e-3: an order of
 magnitude more movement, and still constrained enough to be governed by
 lr rather than λ). λ is irrelevant across this 100x range at the safe lr:
 mean PER differs only in the 4th decimal between λ=30/300/3000.
@@ -1959,17 +1959,17 @@ mean PER differs only in the 4th decimal between λ=30/300/3000.
 **Answer: no, 1,024 parameters is not enough.** It is enough to remain
 stable when trained jointly across 45 sessions (`docs/DESIGN.md` section
 10's day-layer keep/drop rule), and not enough to correct a single new,
-heavily-drifted day from a small labeled budget — the mechanism's own
+heavily-drifted day from a small labeled budget: the mechanism's own
 capacity is the limit, not the optimizer.
 
 **Caveat, stated honestly:** the safe learning rate was chosen
 specifically to avoid harm on the hardest session (+329d), so this
-capacity ceiling is measured at a THROTTLED setting — Arm 2 is further
+capacity ceiling is measured at a THROTTLED setting: Arm 2 is further
 below its own best-case ceiling on easier sessions than this number
 suggests. At the old, unsafe lr=1e-3, Arm 2 on +42d reached PER
 improvements of +0.061 (N=10) and +0.106 (N=100), against the safe grid's
 +0.0095 and +0.0178 there. Arm 3b still wins at +42d regardless (+0.040 /
-+0.200), so the cross-arm ranking is unaffected — but "Arm 2 is a no-op"
++0.200), so the cross-arm ranking is unaffected, but "Arm 2 is a no-op"
 is a claim about a globally-safe learning rate, not a universal capacity
 limit independent of lr.
 
@@ -1980,7 +1980,7 @@ limit independent of lr.
 **Question:** Arm 3b's learning rate (1e-3) was measured by a dedicated
 sweep specifically to avoid baking in a guessed value. That measured
 value was then reused, unmeasured, for Arm 2 (1,024 trainable parameters)
-and Arm 3a (21,033) — four and three orders of magnitude smaller than Arm
+and Arm 3a (21,033): four and three orders of magnitude smaller than Arm
 3b's 16.6M. Does it still hold?
 
 **Method:** Diagnosed via Arm 2's behavior on the hardest session
@@ -1988,24 +1988,24 @@ and Arm 3a (21,033) — four and three orders of magnitude smaller than Arm
 an observed failure (the "too-weak regularization" hypothesis), then
 swept learning rate directly, then re-swept λ at the corrected rate.
 
-**Result:** No — it does not transfer, and the failure mode is
+**Result:** No. It does not transfer, and the failure mode is
 specifically consistent with the anchor being overpowered, not with
 insufficient anchor strength. At lr=1e-3, N=10, sweeping λ over
 {30,300,3000}: the fitted layer's `max|scale-1|` landed at **0.0996 /
-0.0992 / 0.0918** — essentially unchanged across a 100x range — while the
+0.0992 / 0.0918** (essentially unchanged across a 100x range), while the
 penalty's own share of the total loss rose from **0.16% to 9.41%**. The
 CTC gradient at this lr overpowers the identity anchor regardless of how
 hard the anchor pulls. Consequently, STRONGER anchoring made Arm 2's
 +329d failure WORSE, not better (4/5, 4/5, 5/5 splits worse than Arm 0 at
-λ=30/300/3000 respectively) — the opposite of what the "too-weak
+λ=30/300/3000 respectively): the opposite of what the "too-weak
 regularization" hypothesis predicted, refuting it. Arm 3a was harmed too,
 in a different way: at lr≥1e-4, its N=10 improvement REVERSES between
-step 200 and step 400 (starts better than Arm 0, ends worse) — classic
+step 200 and step 400 (starts better than Arm 0, ends worse): classic
 overfitting to a tiny calibration set, on the arm with 21,000 parameters
 to fit from 10 sentences.
 
 **Consequence:** A Task-1-style learning-rate sweep is required per arm,
-not per project — the whole point of measuring lr 1e-3 for Arm 3b was to
+not per project: the whole point of measuring lr 1e-3 for Arm 3b was to
 avoid a guessed value, and that discipline was silently dropped the
 moment the value was reused elsewhere. Arm 2 and Arm 3a's final grid
 values (lr=1e-5/400 steps and lr=1e-4/200–400 steps respectively) were
@@ -2024,7 +2024,7 @@ evaluate on a calibration TRIAL." Is that the right unit of leakage?
 (case/whitespace-normalized) also appeared among that same split's
 calibration trials, across every (session, N, split) cell in the grid.
 
-**Result:** No — the right unit is the SENTENCE, not the trial: the same
+**Result:** No. The right unit is the SENTENCE, not the trial: the same
 sentence text can occur as two distinct trials within one session, so a
 model fine-tuned on one trial could be scored on the other and get credit
 for memorizing a phoneme sequence rather than decoding it. 32 of 90
@@ -2036,12 +2036,12 @@ N=100).
 Fitted weights for Arm 2/3a/3b were never saved during the grid run, so
 Arm 3a and Arm 3b were REFIT on the 32 affected cells (identical recipe)
 and each refit model scored on both the original and the
-sentence-de-duplicated evaluation set — isolating the leak's effect from
+sentence-de-duplicated evaluation set, isolating the leak's effect from
 ordinary refit-to-refit training noise (dropout is unseeded; two refits
 of the "same" cell differ by ≈0.001–0.003 PER on that basis alone). Arm
 0/1a/1b needed no refit (deterministic, dropout-off evaluation) and were
 re-scored exactly (recomputed full-eval PER matched the recorded grid
-values to 0.00e+00). Arm 2 was not refit — analytically unaffected, since
+values to 0.00e+00). Arm 2 was not refit: analytically unaffected, since
 a transform that stays within 0.004 of identity (see the capacity entry
 above) has no capacity to memorize a specific sentence's phoneme
 sequence.
@@ -2049,7 +2049,7 @@ sequence.
 **Within-model leak effect on Arm 3b's improvement over Arm 0** (negative
 = the leak inflated it): +58d: −0.0037 / −0.0062 / −0.0066 (N=10/25/50);
 +329d: −0.0004 / −0.0005 / −0.0005 / **+0.0014 (sd 0.0024)** (N=10/25/50/
-100). At +329d N=100 — the headline late-session cell — the effect is
+100). At +329d N=100 (the headline late-session cell) the effect is
 indistinguishable from zero: the "~26 minutes recovers 0.081 PER" claim
 becomes **0.0866** de-duplicated, unchanged in substance. At +58d the
 leak inflated Arm 3b by 0.004–0.007, small next to gains of 0.05–0.17
@@ -2060,7 +2060,7 @@ N=50, drops to 29 evaluation trials after de-duplication.
 **Prevention:** `split_calibration_trials` (`src/b2t_drift/evaluation/
 calibration.py`) gained an explicit `dedup_sentences` option
 (`split_off_sentence_overlap` does the work), covered by 6 new tests. The
-default remains `False` — the Phase 3 grid used `False` throughout, and
+default remains `False`: the Phase 3 grid used `False` throughout, and
 that choice is now explicit and self-documented rather than an implicit
 gap in the stated protocol. `results/recalibration_grid.csv` gained
 `n_eval_overlap`, `n_eval_dedup`, `arm0_per_dedup`, `per_dedup`,
@@ -2079,8 +2079,8 @@ independence is required.
 ### Task 1's gap-fill: two intermediate sessions turn a descriptive slope into a significant one (2026-09-28)
 
 **Question:** The recovery-fraction curve had no measured session between
-+58d and +329d — a 271-day window chosen by session selection, not a data
-limitation (s05 has passing sessions at +184d through +294d). Does
++58d and +329d (a 271-day window chosen by session selection, not a data
+limitation: s05 has passing sessions at +184d through +294d). Does
 filling it change the shape or the statistical support of "recovery
 falls with elapsed time"?
 
@@ -2088,28 +2088,28 @@ falls with elapsed time"?
 N=50, 5 splits, on the two s05 passing sessions in +150d–+300d that
 maximize the minimum spacing among {+58d, x, y, +329d}: **+184d
 (t15.2024.02.25, 216 trials)** and **+259d (t15.2024.05.10, 135
-trials)** — spacings of 126/75/70 days, the most even split the available
+trials)**: spacings of 126/75/70 days, the most even split the available
 sessions (184/196/203/205/259/294d) allow. Same lr/step schedule and
 calibration-split seeds as the main grid. UNLIKE the main grid, used
 `dedup_sentences=True` for these new cells (recorded explicitly, per the
-prevention above) — measured overlap was 0% at both sessions, all N, all
+prevention above); measured overlap was 0% at both sessions, all N, all
 splits, so de-duplication changed nothing here in practice.
 
 **Result:** Recovery fraction at N=50: +184d 19.5% ± 2.8, +259d 19.9% ±
-2.7 — almost identical to each other, and roughly HALFWAY between the
+2.7, almost identical to each other, and roughly HALFWAY between the
 +58d plateau (~36–43%) and the +329d/+597d plateau (~9–12%). With these
 two points added (7 sessions total, 3 at N=100), the N=25/N=50
 recovery-fraction slopes become statistically significant (p=0.050,
 p=0.025) where the original 5-session slopes were not (best: N=50,
 p=0.074). The decline is NOT smooth: essentially all of it happens in two
 sharp steps, +58d→+184d and +259d→+329d, separated by flat plateaus
-before, between, and after — not a continuous decay with elapsed time.
+before, between, and after, not a continuous decay with elapsed time.
 40 new rows appended to `results/recalibration_grid.csv`, marked
 `is_gapfill=1`; all 545 pre-existing rows are byte-for-byte unchanged.
 `figures/recalibration_recovery_fraction.png` regenerated across all 7
 sessions.
 
-**Consequence:** The gap was worth filling — it changed a
+**Consequence:** The gap was worth filling: it changed a
 just-shy-of-significant descriptive slope into a significant one, and
 revealed that the underlying shape is step-wise, not smooth. Confirms
 `docs/FINDINGS.md`: "Recalibration slows the decline but does not restore

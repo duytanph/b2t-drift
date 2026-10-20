@@ -4,7 +4,7 @@ Source: Brain-to-Text '25 Kaggle competition data page
 (https://www.kaggle.com/competitions/brain-to-text-25/data).
 
 Index 0 is the CTC blank symbol; it never appears in `seq_class_ids` within
-`seq_len` (see GLOSSARY.md "Dataset facts"). Indices 1-39 are the 39
+`seq_len` (see docs/DATASET.md section 8). Indices 1-39 are the 39
 standard ARPABET phonemes, in alphabetical order. Index 40 is a silence
 token, not a phoneme. `seq_class_ids` values are observed empirically to
 fall in the range 1-40.

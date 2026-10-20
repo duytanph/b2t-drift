@@ -2,7 +2,7 @@
 #
 # Values confirmed against data/raw/hdf5_data_final/ via
 # scripts/00_verify_data.py and scratch/investigate_labels.py (see
-# GLOSSARY.md "Dataset facts" for the full record). See the module
+# docs/DATASET.md for the full record). See the module
 # docstring in src/b2t_drift/data/hdf5_io.py for the trial-group schema.
 
 dataset_name: t15

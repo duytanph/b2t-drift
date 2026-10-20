@@ -20,7 +20,7 @@ from b2t_drift.phonemes import N_CLASSES
 class DataConfig:
     """Typed view of a `configs/data/*.yaml` file.
 
-    Fields match `configs/data/t15.yaml`; see GLOSSARY.md "Dataset facts"
+    Fields match `configs/data/t15.yaml`; see `docs/DATASET.md`
     for how these values were established.
     """
 
