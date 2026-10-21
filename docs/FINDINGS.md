@@ -1194,7 +1194,7 @@ terms even though it stays far ahead of the old decoder throughout.
 
 ---
 
-### Substitution rate among emitted phonemes rises under the settled architecture -- the old flatness was a ceiling artifact (2026-09-11)
+### Substitution rate among emitted phonemes rises under the settled architecture: the old flatness was a ceiling artifact (2026-09-11)
 
 **Supersedes** "The confounded substitution rate and its correction"
 (2026-09-09)'s flat-slope conclusion (−0.0027/100d), measured on the OLD
@@ -1501,7 +1501,7 @@ widening gap, not that SBP itself is confirmed to be declining.**
 
 **Consequence:** SNR loss is confirmed at the feature level. **See
 "SBP-only is not more drift-resistant than TX-only, despite SNR loss's
-feature-level prediction -- TX/SBP redundancy is why" (2026-09-18) for why
+feature-level prediction: TX/SBP redundancy is why" (2026-09-18) for why
 this does not extend cleanly to a decoder-level prediction.**
 
 ---
@@ -1691,7 +1691,7 @@ linear map to correct. `docs/DESIGN.md` section 5 is updated. Figure:
 
 ---
 
-### SBP-only is not more drift-resistant than TX-only, despite SNR loss's feature-level prediction -- TX/SBP redundancy is why (2026-09-18)
+### SBP-only is not more drift-resistant than TX-only, despite SNR loss's feature-level prediction: TX/SBP redundancy is why (2026-09-18)
 
 **Question:** SNR loss predicts an SBP-only decoder should be more
 drift-resistant than a TX-only one (TX declines 26x faster: "SNR loss
@@ -2115,3 +2115,56 @@ revealed that the underlying shape is step-wise, not smooth. Confirms
 `docs/FINDINGS.md`: "Recalibration slows the decline but does not restore
 function" with stronger statistical support and a corrected description
 of the curve's shape.
+
+---
+
+### Length-distribution documentation errors traced to one session's statistics; padding waste re-measured (2026-10-21)
+
+**Question:** `docs/DATASET.md` section 6 stated `n_time_steps` spans
+138-1025+ bins, median ~527 (~10.5s); `docs/DESIGN.md` section 8 stated it
+spans 138-2179+ bins. The two disagreed, and neither number carried a
+sample size. What is the true distribution, and where did the two wrong
+numbers come from?
+
+**Method:** Read `n_time_steps` directly from every labeled trial's HDF5
+attributes (`iter_trial_ids`, train+val partitions, all 45 sessions),
+not from the per-session `session_manifest.csv` aggregates alone. Then
+checked whether 1025 or 2179 matched any single session's, cut point's,
+or corpus subset's own max.
+
+**Result:** True distribution across all 9,498 labeled trials: min 138,
+max **2475**, median **845**, p99 **1806**. In seconds (20ms bins): 2.8
+to 49.5s, median 16.9s, p99 36.1s. 47 trials (0.49%) exceed 2000 bins; a
+thin but real populated tail, not a single outlier. 2,651 trials (27.9%
+of the dataset) exceed the old "1025" figure. **1025 and "median ~527"
+are exactly `t15.2023.08.11` (session 1)'s own `max_time_bins` and
+`median_time_bins`** from `session_manifest.csv`, mistaken for the
+dataset's. **2179 matched no session, cut point, or corpus subset** in
+the manifest; its source could not be identified. Two numbers derived
+from the wrong max were consequently also wrong: the seconds range
+(2.8-20.5s, derived from 1025 x 20ms) and the "7.4x" length spread
+(1025/138); the true spread is **17.9x** (2475/138).
+
+Re-measured the padding-waste claim this error sat beside
+(`docs/DESIGN.md` section 8: "35.5% vs. 13.7% bucketed, at a 32-trial
+pool"), since no entry here documented it. Computed `1 - (sum of true
+lengths) / (batch_size * sum of batch maxima)` at `batch_size=32` over
+the same 9,498-trial population, for (a) random batching and (b) the
+real `LengthBucketedSampler` (`src/b2t_drift/data/collate.py`), averaged
+over 20 shuffles/seeds. Random: mean **47.6%** (std 0.20%, range
+47.3-47.9%). Bucketed: mean **9.5%** (std 0.05%, range 9.3-9.6%). Both
+differ materially from the original 35.5%/13.7%, in opposite directions,
+consistent with the true spread being more than double what the
+original (wrong) range implied.
+
+**Consequence:** `docs/DATASET.md` section 6's distribution line and
+section 14's length-spread bullet, and `docs/DESIGN.md` section 8, are
+corrected to the measured values above, each stating its
+sample size. **The corrected 17.9x spread makes the existing
+length-bucketing decision MORE justified, not less: no design decision
+changes.** The lesson is procedural, not architectural: a per-session
+manifest aggregate (one session's min/max/median) was read as a
+dataset-wide fact without checking its scope, and an unsourced number sat
+in `docs/DESIGN.md` for over a month before being traced. Future
+distribution claims in these docs should name their sample size in the
+line itself, which is now also done here.

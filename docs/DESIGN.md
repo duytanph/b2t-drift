@@ -228,12 +228,12 @@ and is useful only for validating our evaluation code.
 - **Lazy HDF5 loading.** The dataset is ~12 GB against a 16 GB system RAM
   budget: the Dataset class reads lazily per `__getitem__`, never holds
   everything in memory.
-- **Length-bucketed batching** (`LengthBucketedSampler`,
-  `data/collate.py`). `n_time_steps` spans 138–2179+ bins; random
-  batching wastes most of each batch on padding (35.5% vs. 13.7%
-  bucketed, at a 32-trial pool). Only batch ORDER is shuffled per epoch.
-  **Cost, accepted deliberately:** batches are non-i.i.d. in sentence
-  length, standard practice in speech recognition, not a bug.
+- **Length-bucketed batching** (`LengthBucketedSampler`, `data/collate.py`).
+  `n_time_steps` spans 138–2475 bins; random batching wastes most of each
+  batch on padding (47.6% vs. 9.5% bucketed, 32-trial pool, `docs/FINDINGS.md`).
+  Only batch ORDER is shuffled per epoch. **Cost, accepted deliberately:**
+  batches are non-i.i.d. in sentence length, standard practice in speech
+  recognition, not a bug.
 - **DataLoader: `num_workers=2`, `persistent_workers=True`,
   `pin_memory=True`.** Settled by a real measurement against the actual
   dataset on SSD storage, not synthetic benchmarking: a benchmark must
