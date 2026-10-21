@@ -55,8 +55,8 @@ around 0.80–0.84 for the remaining fifteen months. The early-vs-late
 slope ratio is 15–24×, confirmed by training the same architecture at
 three independent cut points in the recording (s05/s10/s15: a fourth,
 s20, starts too late to observe the early climb, which is a coverage gap
-in that comparison, not a contradiction of it). The steepest point
-measured anywhere in the sweep is 0.177, five days after a larger
+in that comparison, not a contradiction of it). The best held-out PER
+measured anywhere in the sweep is 0.177, five days after the largest
 training block (s15). More calibration data buys a better starting
 point, but not a flatter curve past the first few months.
 

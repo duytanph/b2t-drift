@@ -76,12 +76,12 @@ common, easy mistake: keep them separate in every results table.
   Model B (different training data, different scale of task).
 - **Model B: our-split drift model.** Trained on **our split** (section
   2): the temporal cut-point sweep. Its PER curve across held-out
-  sessions **is the project**.
+  sessions is the project.
 - **The paper's published numbers (`docs/DATASET.md` section 2) are not a
   drift comparison, for either model.** The published system was
   continuously, periodically recalibrated; Model B is calibrated once and
-  frozen. A gap between our curve and the paper's flat one is not
-  evidence of a worse decoder, it's the point of the study.
+  frozen. A gap between our curve and the paper's flat one is therefore
+  expected by construction, not evidence of a worse decoder.
 
 ---
 

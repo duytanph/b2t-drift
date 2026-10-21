@@ -152,7 +152,7 @@ The 512 columns are ordered by array and feature type:
 | 384–447 | 55b | Spike band power |
 | 448–511 | Dorsal 6v | Spike band power |
 
-> ⚠️ **The official README states these boundaries as 0–64, 65–128, 129–192, etc.**, which is internally inconsistent (0–64 is 65 values, not 64). The intent is clearly 64-electrode blocks as written above. **Verify empirically before relying on it**: a shifted feature index would silently corrupt any per-array analysis.
+> **The official README states these boundaries as 0–64, 65–128, 129–192, etc.**, which is internally inconsistent (0–64 is 65 values, not 64). The intent is clearly 64-electrode blocks as written above. **Verify empirically before relying on it**: a shifted feature index would silently corrupt any per-array analysis.
 
 **Two consequences worth remembering:**
 
@@ -309,16 +309,19 @@ Applied by the authors before release:
    actually one-sided like `[-inf, 10]`: both are consistent with what
    we measured.
 
-   **Flagged for Week 2, not yet established:** a dead or dying channel,
-   divided by its own near-zero standard deviation during rolling
-   normalization, would have its residual noise inflated toward unit
-   variance (`docs/DESIGN.md` section 6). The +10 clip caps how far
-   that inflation can go. **A channel that saturates at the clip value
-   unusually often is therefore a *candidate* signature of channel
-   death.** This is a hypothesis to test empirically in Week 2 (e.g. does
-   clip-saturation rate per channel correlate with other channel-health
-   indicators, and does it change over session date), not an established
-   finding: nothing in this section confirms it actually happens.
+   **Confirmed as a concurrent marker, not a leading indicator:** a dead
+   or dying channel, divided by its own near-zero standard deviation
+   during rolling normalization, would have its residual noise inflated
+   toward unit variance (`docs/DESIGN.md` section 6). The +10 clip caps
+   how far that inflation can go. **A channel that saturates at the clip
+   value unusually often is therefore a *candidate* signature of channel
+   death.** Tested: saturation rate correlates strongly with low firing
+   rate (Spearman −0.793, significant in all 45 sessions) and rises with
+   session date, but it was NOT confirmed as a leading indicator, since
+   both channels that crossed below 2 Hz did so at the final session,
+   leaving too few post-crossing points to test prediction. See
+   `docs/FINDINGS.md` ("Clip saturation is a concurrent marker of low
+   firing rate, not confirmed as a leading indicator").
 
 9. **Raw spike counts are recoverable, exactly, per (sentence, channel).
    [verified: empirical, 2026-09-03].** Follow-up to the correction in
@@ -385,9 +388,9 @@ Sentences were drawn from **six** different corpora [verified against `data/exte
 
 > Earlier drafts of this document (and the official repo's own README) name only five corpora, omitting **Harvard**. It is a small corpus (98 trials, confined to `2023-10-20` through `2023-11-03`) but it is present in the released description CSV and should not be forgotten when stratifying by corpus.
 
-Additionally (and this is the important part), **most data is attempted *vocalized* speech, but some is attempted *silent* speech**, and the authors deliberately **do not publish which blocks are which**.
+Additionally, **most data is attempted *vocalized* speech, but some is attempted *silent* speech**, and the authors deliberately **do not publish which blocks are which**.
 
-> 🚨 **This is a genuine threat to the validity of a drift analysis.** If corpus composition or speaking strategy varies systematically over the 20 months, then apparent "degradation over days" could partly be distribution shift in the *task*, not degradation of the *neural signal*. A decoder trained mostly on 50-word-corpus blocks will do worse on Switchboard blocks regardless of electrode health.
+> **This is a genuine threat to the validity of a drift analysis.** If corpus composition or speaking strategy varies systematically over the 20 months, then apparent "degradation over days" could partly be distribution shift in the *task*, not degradation of the *neural signal*. A decoder trained mostly on 50-word-corpus blocks will do worse on Switchboard blocks regardless of electrode health.
 >
 > **Mitigation:** the official repo ships `data/t15_copyTaskData_description.csv`, giving block-by-block session date, block number, trial count, corpus, and split assignment. Download it. Before drawing any conclusion from the drift curve, check whether corpus composition is stable across the timeline. If it isn't, stratify by corpus or restrict the analysis to a consistent subset.
 >
@@ -475,7 +478,7 @@ The Kaggle terms explicitly permit repartitioning the train and validation data.
 - **`trial_num` is per-file and restarts at 0.** Not a global identifier.
 - **Data will not fit in RAM.** ~12 GB against 16 GB system memory. The Dataset class must read lazily from HDF5.
 - **Length spread is 7.4×.** Random batching wastes most of each batch on padding. Use length-bucketed batching.
-- **Normalize per block, not per session.**
+- **Normalization is a rolling per-sentence window, not per-block or per-session.** See section 9 item 7.
 - **Feature index boundaries in the official README are off by one.** Verify empirically.
 - **Silence (class 40) will dominate any confusion matrix.** Most bins in a 10-second trial are silence. Exclude or plot separately.
 - **Offline metrics overstate closed-loop performance.** In real use the participant adapts to the decoder's behavior. Nothing in this dataset can capture that.
@@ -511,7 +514,7 @@ The full published pipeline goes: neural features → GRU + CTC → phoneme sequ
 
 - [x] Verify the 512-feature column boundaries empirically (official docs are off by one): confirmed 64-wide blocks; see `docs/FINDINGS.md` ("Feature column layout verified empirically").
 - [x] Download `t15_copyTaskData_description.csv` and check corpus composition across the 20-month timeline: done; serious confound found, see `docs/FINDINGS.md` ("Corpus composition is a serious training/eval confound").
-- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code: loaded and inspected (not yet run for inference); see `docs/FINDINGS.md` ("Block count decreases over the recording...").
+- [x] Confirm whether the pretrained checkpoint can be loaded and evaluated with our own code: loaded, inspected, and run for inference (all 113 checkpoint parameters mapped; 3-session official-val PER 0.109 against the checkpoint's recorded 0.101; a 10-session date-spread shows no significant trend, Pearson r=0.40, p=0.25); see `docs/FINDINGS.md` ("The pretrained baseline checkpoint verified as a drift-independent alignment tool").
 - [x] Determine typical block sizes and whether block count per session varies systematically over time: done; see `docs/FINDINGS.md` ("Block count decreases over the recording...").
 - [x] Determine Switchboard-only viability for the drift curve as a mitigation for the corpus confound. Resolved: adopted as the PRIMARY analysis (`docs/DESIGN.md` section 7, corpus stratification decision); 17/30 held-out sessions survive a 50-trial threshold (corrected count, see the next item), full day-offset range (+5 to +546d) and all four curve endpoints preserved; see `docs/FINDINGS.md` ("Switchboard survivor count corrected to 17 of 30 sessions").
 - [x] Resolve the CSV-vs-manifest trial-count discrepancy. Resolved: goes both directions (not uniformly CSV ≥ actual), roughly proportional to corpus/partition size (not concentrated), and at least partly caused by confirmed partition misattribution (a Switchboard block's trials split across labeled `val` and unlabeled `test` were being counted as if fully labeled) rather than only QC drops. HDF5/manifest is authoritative for counts; CSV is authoritative for corpus labels. See `docs/FINDINGS.md` ("Corpus CSV trial counts are unreliable; the manifest is authoritative").
