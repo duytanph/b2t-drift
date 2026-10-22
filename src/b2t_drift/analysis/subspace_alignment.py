@@ -53,7 +53,7 @@ class CovarianceAccumulator:
     Matches this project's "lazy loading" discipline (`data/dataset.py`'s
     module docstring) -- computing `C_source` from the s05 training block's
     908 trials should not require materializing all of their concatenated
-    timesteps as one array, since a handful of long trials at up to ~2,179
+    timesteps as one array, since a handful of long trials at up to ~1,735
     timesteps each would otherwise force an avoidable, single large
     allocation.
 

@@ -215,6 +215,9 @@ than glossed over.
 ## Repo layout
 
 - `src/b2t_drift/`: library code; `scripts/`: thin CLI entry points
+- `tools/`: standalone diagnostics that back specific documented figures
+  (e.g. padding waste, GPU step time/VRAM), distinct from `scripts/`'s
+  numbered pipeline
 - `splits/`: versioned session split manifests; `results/` / `figures/`:
   versioned numeric results and plots
 - `docs/DESIGN.md`: current decisions and their justification, no

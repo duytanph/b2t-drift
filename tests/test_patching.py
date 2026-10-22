@@ -45,7 +45,16 @@ def _require_real_data() -> None:
 
 @pytest.mark.parametrize(
     "input_len",
-    [14, 15, 17, 18, 20, 21, 25, 50, 137, 138, 141, 527, 528, 1000, 1001],
+    # 14/15: the smallest valid input and one above it. 17/18: the patch
+    # count's 1->2 transition boundary (stride=4, so counts increment every
+    # 4 bins past patch_size=14). 20/21/25/50: generic sanity points with
+    # increasing distance from that boundary. 137/138/141: one bin below,
+    # at, and just above the real measured n_time_steps minimum (138,
+    # `docs/DATASET.md` section 6). 845/2475: the real measured median and
+    # maximum n_time_steps across all 9,498 labeled trials (same section) --
+    # replacing an earlier 527/528/1000/1001, which stood in for a
+    # since-corrected wrong median and an arbitrary large value.
+    [14, 15, 17, 18, 20, 21, 25, 50, 137, 138, 141, 845, 2475],
 )
 def test_ctc_input_lengths_matches_actual_patched_time_dimension(input_len: int) -> None:
     model = GRUCTC(

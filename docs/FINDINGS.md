@@ -2175,3 +2175,69 @@ dataset-wide fact without checking its scope, and an unsourced number sat
 in `docs/DESIGN.md` for over a month before being traced. Future
 distribution claims in these docs should name their sample size in the
 line itself, which is now also done here.
+
+---
+
+### At the real median length, batch=64 does not fit in 8 GB; it silently spills through WDDM (2026-10-22)
+
+**Question:** "GPU compute is not a constraint on model size" (2026-09-01)
+benchmarked at `seq_len=527`, the session-1 statistic since corrected to
+the true median 845 (previous entry). Its headline, "no OOM risk even at
+batch=64," is quoted by `docs/DESIGN.md` section 8. Does that claim
+survive at the real median, measured, not estimated?
+
+**Method:** Reran the GPU benchmark (then in `scratch/`, now tracked as
+`tools/benchmark_gru.py`; same RTX 2080 SUPER, same
+8,192 MiB reported VRAM, same baseline 5L/1024H and small 3L/512H
+configs, same fp32/fp16 precisions) with `SEQ_LENS` changed from
+`{527, 132}` to `{845, 211}` (845/4, keeping the 4x-downsample arm
+proportional). Confirmed first that the original table's `461.0 ms/step`
+/ `3.4 GB` figures were measured at `batch=32` ("GPU compute is not a
+constraint on model size"'s own Method line states `batch=32` for the
+whole grid; its `batch=64` row is a separate fit-only check). Measured
+both `batch=32` and `batch=64` at the real lengths, all other factors
+unchanged.
+
+**Result:** At `seq_len=845`, baseline (5L,1024H), fp32: `batch=32`
+measured **673.70 ms/step, 5029 MB peak** (vs. the superseded entry's
+461.0 ms/step / 3.4 GB at `seq_len=527`, confirming the expected
+slowdown). `batch=64` reported **"fits," 9527 MB peak, at 15023.81
+ms/step** -- 22.3x slower than its own `batch=32` row, not the ~1.8x
+`batch=32`->`batch=64` scaling every other configuration in this run
+shows. **9527 MB exceeds this card's 8,192 MiB.** The reported "fits"
+and the absence of a raised `torch.cuda.OutOfMemoryError` do not mean
+it ran on-card: this is the same WDDM driver-level spill-to-system-RAM
+path already documented in `src/b2t_drift/training/loop.py`'s
+`train_one_step_accumulated` docstring (observed there: 26x slowdown,
+N=100 vs. N=10, during the recalibration grid). fp16 at the same
+`seq_len=845`/`batch=64` reports 5130 MB (genuinely under 8,192 MiB) at
+404.05 ms/step -- only 1.3x its own `batch=32` row (301.05 ms/step),
+consistent with a real, non-spilling fit. The small model (3L,512H)
+fits cleanly at `batch=64`/`seq_len=845` in both precisions (3412 MB
+fp32, 1872 MB fp16), with proportionate step times.
+
+| model | seq_len | precision | batch | ms/step | peak (reported) MB |
+|---|---:|---|---:|---:|---:|
+| baseline (5L,1024H) | 845 | fp32 | 32 | 673.70 | 5029 |
+| baseline (5L,1024H) | 845 | fp32 | 64 | **15023.81** | **9527 (spilled)** |
+| baseline (5L,1024H) | 845 | fp16 | 32 | 301.05 | 2826 |
+| baseline (5L,1024H) | 845 | fp16 | 64 | 404.05 | 5130 |
+| small (3L,512H) | 845 | fp32 | 64 | 269.24 | 3412 |
+| small (3L,512H) | 845 | fp16 | 64 | 130.81 | 1872 |
+
+**Consequence:** **`docs/DESIGN.md` section 8's "no OOM risk even at
+batch=64" does not survive at the real median length, for the baseline
+architecture in fp32.** It held only at the wrong, 38%-shorter `seq_len`
+the original benchmark used. It does survive in fp16, and for the small
+architecture in both precisions. `docs/DESIGN.md`'s wording is left
+unchanged pending a decision on how to state this (flagged separately,
+not resolved here). Two further echoes of the same session-1-derived
+`2,179` figure were found and corrected while investigating this:
+`src/b2t_drift/analysis/subspace_alignment.py`'s `CovarianceAccumulator`
+docstring (described the s05 training block specifically; measured
+1,735, not 2,179 or the dataset-wide 2,475) and
+`src/b2t_drift/training/loop.py`'s `train_one_step_accumulated`
+docstring (describes the recalibration grid's 7 evaluation sessions
+specifically; measured 2,355, not 2,179). Neither of those two was a
+quantitative claim anything downstream depended on; both were
+illustrative figures inside comments.

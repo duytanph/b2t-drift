@@ -357,7 +357,8 @@ def train_one_step_accumulated(
     WHY THIS EXISTS (Phase 3, Arm 2/3a/3b). A "step" for these arms is
     defined as one full-batch gradient step over all N calibration trials
     (`docs/FINDINGS.md`: the N=100 recalibration-grid slowdown). At N=100,
-    padding every trial to the longest (up to 2,179 bins) and patching to
+    padding every trial to the longest (up to 2,355 bins across the
+    recalibration grid's 7 sessions) and patching to
     7,168 dims produces activations large enough to push this project's
     8 GB GPU into WDDM's driver-level spill-to-system-RAM path (observed:
     ~2.47 s/step at N=100 vs. ~0.093 s/step at N=10 -- a 26x slowdown for
