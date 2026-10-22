@@ -2148,14 +2148,21 @@ from the wrong max were consequently also wrong: the seconds range
 Re-measured the padding-waste claim this error sat beside
 (`docs/DESIGN.md` section 8: "35.5% vs. 13.7% bucketed, at a 32-trial
 pool"), since no entry here documented it. Computed `1 - (sum of true
-lengths) / (batch_size * sum of batch maxima)` at `batch_size=32` over
-the same 9,498-trial population, for (a) random batching and (b) the
-real `LengthBucketedSampler` (`src/b2t_drift/data/collate.py`), averaged
-over 20 shuffles/seeds. Random: mean **47.6%** (std 0.20%, range
-47.3-47.9%). Bucketed: mean **9.5%** (std 0.05%, range 9.3-9.6%). Both
+lengths) / (batch_size * sum of batch maxima)` at `batch_size=32`,
+`drop_last=True` (matching `configs/experiment/switchboard_baseline.yaml`
+and `scripts/02_train.py`'s train-partition DataLoader) over the same
+9,498-trial population, for (a) random batching and (b) the real
+`LengthBucketedSampler` (`src/b2t_drift/data/collate.py`), averaged over
+50 shuffles/seeds. Random: mean **47.6%** (std 0.19%, range
+47.2-47.9%). Bucketed: mean **9.3%** (std 0.06%, range 9.2-9.5%). Both
 differ materially from the original 35.5%/13.7%, in opposite directions,
 consistent with the true spread being more than double what the
-original (wrong) range implied.
+original (wrong) range implied. "Pool" is the same thing as
+`batch_size` here; `LengthBucketedSampler` has no separate pool
+parameter. This measurement is now a tracked, re-runnable script,
+`tools/measure_padding_waste.py` (`uv run tools/measure_padding_waste.py`),
+not a one-off: the prior version lived in `scratch/` and was therefore
+exactly as untraceable as the number it was replacing.
 
 **Consequence:** `docs/DATASET.md` section 6's distribution line and
 section 14's length-spread bullet, and `docs/DESIGN.md` section 8, are

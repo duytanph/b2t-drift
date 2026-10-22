@@ -175,7 +175,7 @@ def collate_trials(items: Sequence[dict]) -> dict:
 class LengthBucketedSampler(Sampler[list[int]]):
     """Batches trials of similar duration together, to cut padding waste.
 
-    Trial durations span roughly 7.4x (138 to 2179+ bins,
+    Trial durations span roughly 17.9x (138 to 2475 bins,
     `docs/DATASET.md` section 6). A randomly-composed batch pads every
     short trial out to the longest trial that happened to land in that
     batch, wasting most of the compute on `nn.GRU` inputs and `CTCLoss`
