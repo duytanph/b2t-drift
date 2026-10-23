@@ -69,13 +69,13 @@ Summary above for the one-paragraph version).
 This project trains two distinct models. Conflating their numbers is a
 common, easy mistake: keep them separate in every results table.
 
-- **Model A: official-split pipeline check, FAILED (2026-10-22).** Trained on the official split's `train` partition (all 45 sessions,
-  all corpora, 8,072 trials); exists to confirm our data loading, GRU/CTC core, patching, and training loop produce a PER on the same
-  scale as published results. Two sequential 150-epoch runs diverged to nearly identical, far-worse-than-prior results regardless of
-  day layers: the shipping configuration (diagonal day layers, substituted for the published checkpoint's full parameterization, which
-  destabilizes at this scale) and a day-layer-off control both reached best val PER ~0.31-0.32, worse than a prior, strictly weaker
-  configuration's 0.2963, ruling out the substitution as the cause (`docs/FINDINGS.md`: "Model A diverges with or without day layers
-  at 45-session scale; the day-layer mechanism is not implicated"). **Does not currently establish pipeline correctness at this scale.** Not comparable to Model B.
+- **Model A: official-split pipeline check, EQUIVOCAL (2026-10-23).** Trained on the official split's `train` partition (all 45 sessions, all corpora,
+  8,072 trials); exists to confirm our data loading, GRU/CTC core, patching, and training loop produce a PER on the same scale as published results.
+  The shipping learning rate (0.001) diverges at this scale (~37,800 optimizer steps over 150 epochs vs. ~4,200 for Model B at s05); a day-layer-off
+  control reproduced the same divergence, ruling out the diagonal-for-full day-layer substitution as the cause. At 10x lower (0.0001), training is
+  stable for the full 150 epochs but reaches only val PER **0.2211**: equivocal against the pre-registered bands (pass <=0.20, fail >0.25), not a pass
+  (`docs/FINDINGS.md`: "Model A's divergence is a learning-rate transfer problem, not the pipeline; the result is equivocal"). **The failure mode is
+  an optimization instability, not a pipeline defect: localized to the 45-session/all-corpora regime, independent of day layers, outside every regime Model B exercises.** Not comparable to Model B.
 - **Model B: our-split drift model.** Trained on **our split** (section
   2): the temporal cut-point sweep. Its PER curve across held-out
   sessions is the project.

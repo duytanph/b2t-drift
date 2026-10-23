@@ -1,0 +1,44 @@
+# Learning-rate diagnostic: identical to switchboard_baseline.yaml except
+# `learning_rate: 0.0001` (1/10th). Model A takes ~252 optimizer steps per
+# epoch (8,072 trials / batch 32) against ~28 for Model B at s05: ~37,800
+# steps over 150 epochs vs. ~4,200. `learning_rate: 0.001` was validated
+# only in the smaller-step regime (docs/FINDINGS.md: "Model A fails at
+# 45-session scale regardless of day layers" and its follow-up diagnostic
+# entry). This config isolates whether the divergence is a learning-rate
+# transfer problem, the same class of error already seen once in this
+# project (a rate measured for Arm 3b's 16.6M parameters reused for Arm
+# 2's 1,024).
+#
+# The split manifest is passed via `--split` at the command line, same
+# convention as switchboard_baseline.yaml.
+
+experiment_name: switchboard_baseline_lr1e4
+data_config: configs/data/t15.yaml
+
+model:
+  hidden_size: 512
+  n_layers: 3
+  dropout: 0.4
+  bidirectional: false
+  use_day_layers: true
+  day_layer_parameterization: diagonal
+  input_dropout: 0.0
+  smoothing_sigma_bins: 2.0
+  patch_size: 14
+  patch_stride: 4
+
+training:
+  seed: 0
+  max_epochs: 150
+  patience: 150
+  batch_size: 32
+  learning_rate: 0.0001       # the one variable this config isolates; see module docstring above
+  grad_clip: 1.0
+  day_layer_penalty: 300.0
+  amp: true
+  num_workers: 2
+
+logging:
+  wandb_project: b2t-drift
+  wandb_group: model_a_lr_diagnostic
+  mlflow_experiment: b2t-drift

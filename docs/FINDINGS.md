@@ -2320,19 +2320,21 @@ how far the "diagonal day layers are stable, full day layers are not"
 conclusion generalizes: it is now confirmed only up to 19 sessions, not
 45, and the untested gap between them is larger than previously assumed.
 
-**Wall-clock, corrected and reconciled.** The pre-registered estimate
-(5.10 ms/trial-epoch from the s15 round-5 comparison, scaled to 8,072
-trials: 41.2 s/epoch x 100 epochs = 4,120 s = 69 min) undercounted actual
-wall time by roughly 35-50%, even using the corrected 150-epoch budget
-(expected ~103 min at the corrected per-epoch rate; measured 103.7 and
-94.4 min). The steady-state rate itself was accurate or better (actual
-~37 s/epoch at steady state vs. ~41 s/epoch predicted): the gap is almost
-entirely front-loaded warmup the extrapolation didn't model: epoch 0
-took 172 s (4.6x steady-state) and epochs 1-10 stayed elevated, consistent
-with cold page-cache across 8,072 distinct trial files spanning 45
-session directories warming up over the first ~10 epochs. Future
-wall-clock estimates at a new trial-count scale should add this warmup
-cost explicitly, not assume steady-state throughout.
+**Wall-clock: the per-epoch model was accurate; the apparent discrepancy
+was a unit mismatch, not an error in the rate.** The pre-registered
+estimate (5.10 ms/trial-epoch from the s15 round-5 comparison, scaled to
+8,072 trials: 41.2 s/epoch) was quoted as 69 min against a 100-epoch
+budget, but the epoch budget was then set to 150 to match Model B's
+convention, and the estimate was never re-scaled to match. Re-scaled
+correctly: 41.2 s/epoch x 150 epochs = 6,175 s. Run 1 actual: 6,221.4 s
+(0.7% over). Run 2 actual: 5,661.9 s (8% under). The per-epoch rate was
+accurate to within 1%; there was no wall-clock discrepancy to explain.
+Separately, a real but small (~2%) effect is worth noting: epoch 0 took
+172 s against a ~37 s steady state, an excess of ~135 s, consistent with
+cold page-cache across 8,072 distinct trial files spanning 45 session
+directories warming up over the first ~10 epochs. This does not explain
+any meaningful fraction of total wall time and is recorded only because
+it is a real, reproducible effect.
 
 **Consequence:** `docs/DESIGN.md` section 3 is updated to state Model A's
 result and what it does and does not establish. No result is added to
@@ -2340,3 +2342,79 @@ result and what it does and does not establish. No result is added to
 This entry corrects and extends "Model A's initial result and divergence"
 (2026-09-08) and "Task 4: Model A retrained without day layers on the
 official split" (2026-09-09); those entries are left unchanged.
+
+---
+
+### Model A's divergence is a learning-rate transfer problem, not the pipeline; the result is equivocal (2026-10-23)
+
+**Question:** The previous entry ruled out the day-layer mechanism.
+Model A takes ~252 optimizer steps/epoch (8,072 trials / batch 32)
+against ~28 for Model B at s05: ~37,800 steps over 150 epochs vs. ~4,200.
+`learning_rate=0.001` was validated only in the smaller-step regime
+(the same class of error already seen once in this project: a rate
+measured for Arm 3b's 16.6M parameters, reused for Arm 2's 1,024, made
+Arm 2 worse than no recalibration until measuring it per-arm resolved
+it). Is Model A's divergence a learning-rate transfer problem?
+
+**Configuration facts, read from the code before running anything.**
+`learning_rate: 0.001` is a flat constant (`configs/experiment/
+switchboard_baseline.yaml`); no scheduler or warmup is configured at all:
+`scripts/02_train.py` calls `training.loop.fit` without a `scheduler`
+argument, and `fit`'s default is `None`, confirmed by every epoch's
+logged `lr=0.0010` staying identical across all 150 epochs of both
+runs in the previous entry. `grad_clip=1.0`. `grad_norm_mean` was logged
+throughout both failing runs: in Run 1, it climbs steadily from ~3.0
+(epoch 14) to ~4.5+ (epoch 29) in the window before its eventual
+divergence, continuing into the hundreds by epoch 130+; Run 2 shows the
+same growth pattern, independent of day layers.
+
+**Pre-registered decision rule, fixed before running:** if diagnostic B
+does not diverge AND its best val PER is below 0.25, run ONE full-length
+confirmation at that learning rate and report it against the original
+bands (pass <=0.20, equivocal 0.20-0.25, fail >0.25), with no further
+tuning. If B still diverges or lands at or above 0.25, stop and document
+the failure.
+
+**Method:** Two 30-epoch diagnostics, sequential, both on
+`splits/official.json`, patched, diagonal day layers, lambda=300 (both
+failing runs peaked at epoch 23-24, so 30 epochs captures the useful
+signal). Diagnostic A: `learning_rate=0.001` (control). Diagnostic B:
+`learning_rate=0.0001` (1/10th).
+
+**Result, diagnostics:** Diagnostic A reproduces Run 1's trajectory
+exactly through the shared epochs (best val PER **0.3090** @ epoch 28,
+`grad_norm_mean` climbing 1.50->3.88 across the 30 epochs, consistent
+with the slower-building instability already seen). Diagnostic B shows
+**no divergence**: train loss falls monotonically every single epoch
+(4.47->0.08) and `grad_norm_mean` falls monotonically too (2.67->0.89),
+the opposite trend from A. Best val PER **0.2463** @ epoch 28, val PER
+at epoch 29 **0.2482**. Per the decision rule: B does not diverge and
+its best PER is below 0.25, so one full-length run follows.
+
+**Result, the full confirmation run** (`learning_rate=0.0001`, 150
+epochs, otherwise identical to Run 1): **no divergence anywhere across
+all 150 epochs**: train loss falls monotonically from 4.47 to ~0.01,
+`grad_norm_mean` falls monotonically from 2.67 to ~0.4. Best val PER
+**0.2211** @ epoch 135, final (epoch 149) **0.2237**. Wall time 6,762.7 s
+(112.7 min). Peak GPU memory 2,017.2 MB.
+
+**Band: EQUIVOCAL (0.2211, between the 0.20 pass threshold and the 0.25
+fail threshold).** Not reinterpreted as a pass. Both FAIL sub-conditions
+are independently checked and neither applies: train loss never rose,
+and 0.2211 is a clear improvement over the prior 0.2963 (not "no clear
+improvement"). The result is squarely equivocal, stated as such.
+
+**Consequence:** The divergence seen in both prior full-length runs was
+a learning-rate transfer problem, not an issue with the pipeline, the
+GRU/CTC core, patching, or the day-layer mechanism: `learning_rate=0.001`
+was tuned in a ~4,200-step regime and does not transfer to a ~37,800-step
+one, the same class of error this project has now hit twice. At the
+transferred rate (0.0001), training is stable for the full 150 epochs,
+but the resulting PER (0.2211) is equivocal against the pre-registered
+bands, not a pass: still roughly double the published checkpoint's 0.101
+and our own reproduction of it (0.109). Per the standing instruction,
+this is the last round on Model A: no further learning rates, schedulers,
+or architecture changes are proposed. `docs/DESIGN.md` section 3 is
+updated to its final state. This entry corrects and extends "Model A
+fails at 45-session scale regardless of day layers" (2026-10-22); that
+entry is left unchanged.
