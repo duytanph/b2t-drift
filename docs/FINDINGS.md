@@ -2202,7 +2202,7 @@ unchanged.
 measured **673.70 ms/step, 5029 MB peak** (vs. the superseded entry's
 461.0 ms/step / 3.4 GB at `seq_len=527`, confirming the expected
 slowdown). `batch=64` reported **"fits," 9527 MB peak, at 15023.81
-ms/step** -- 22.3x slower than its own `batch=32` row, not the ~1.8x
+ms/step**: 22.3x slower than its own `batch=32` row, not the ~1.8x
 `batch=32`->`batch=64` scaling every other configuration in this run
 shows. **9527 MB exceeds this card's 8,192 MiB.** The reported "fits"
 and the absence of a raised `torch.cuda.OutOfMemoryError` do not mean
@@ -2211,7 +2211,7 @@ path already documented in `src/b2t_drift/training/loop.py`'s
 `train_one_step_accumulated` docstring (observed there: 26x slowdown,
 N=100 vs. N=10, during the recalibration grid). fp16 at the same
 `seq_len=845`/`batch=64` reports 5130 MB (genuinely under 8,192 MiB) at
-404.05 ms/step -- only 1.3x its own `batch=32` row (301.05 ms/step),
+404.05 ms/step, only 1.3x its own `batch=32` row (301.05 ms/step),
 consistent with a real, non-spilling fit. The small model (3L,512H)
 fits cleanly at `batch=64`/`seq_len=845` in both precisions (3412 MB
 fp32, 1872 MB fp16), with proportionate step times.

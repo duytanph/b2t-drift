@@ -163,6 +163,10 @@ results were tested, not assembled to fit a story.
 - Test whether a rank-constrained day layer sits usefully between the
   diagonal parameterization's insufficiency and the full parameterization's
   training instability.
+- Training was left at fp32/batch=32 throughout; a measured fp16/batch=64
+  configuration runs 3.3x faster per trial (6.31 ms vs. 21.05 ms) at lower
+  peak VRAM, so the compute budget for any future sweep is larger than this
+  project assumed.
 
 ## Data and reproduction
 

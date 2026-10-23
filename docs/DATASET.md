@@ -477,7 +477,7 @@ The Kaggle terms explicitly permit repartitioning the train and validation data.
 - **Attributes, not datasets.** `n_time_steps` and `seq_len` live in `.attrs`. Listing `f[trial].keys()` will not show them.
 - **`trial_num` is per-file and restarts at 0.** Not a global identifier.
 - **Data will not fit in RAM.** ~12 GB against 16 GB system memory. The Dataset class must read lazily from HDF5.
-- **Length spread is 17.9×** (2475/138 bins; corrected from a previously documented 7.4×, derived from one session's own statistics mistaken for the dataset's -- see `docs/FINDINGS.md`: "Length-distribution documentation errors traced to one session's statistics; padding waste re-measured"). Random batching wastes most of each batch on padding. Use length-bucketed batching.
+- **Length spread is 17.9×** (2475/138 bins; corrected from a previously documented 7.4×, derived from one session's own statistics mistaken for the dataset's; see `docs/FINDINGS.md`: "Length-distribution documentation errors traced to one session's statistics; padding waste re-measured"). Random batching wastes most of each batch on padding. Use length-bucketed batching.
 - **Normalization is a rolling per-sentence window, not per-block or per-session.** See section 9 item 7.
 - **Feature index boundaries in the official README are off by one.** Verify empirically.
 - **Silence (class 40) will dominate any confusion matrix.** Most bins in a 10-second trial are silence. Exclude or plot separately.
