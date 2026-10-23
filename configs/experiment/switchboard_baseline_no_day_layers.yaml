@@ -1,0 +1,43 @@
+# Day-layer control: identical to switchboard_baseline.yaml except
+# `use_day_layers: false`. Exists to isolate one variable at 45-session
+# scale (Model A, the official split): diagonal day layers have only ever
+# been run up to 19 active sessions (s20), so a Model A run alone cannot
+# tell a pipeline problem apart from a day-layer problem at 45 sessions.
+# This config, run on the same split, answers that. Named "patching
+# combined with day layers off" as an untried combination in
+# docs/FINDINGS.md: "Task 4: Model A retrained without day layers on the
+# official split" (2026-09-09), which ran day-layers-off WITHOUT
+# patching; this config adds patching back, completing the 2x2.
+#
+# The split manifest is passed via `--split` at the command line, same
+# convention as switchboard_baseline.yaml.
+
+experiment_name: switchboard_baseline_no_day_layers
+data_config: configs/data/t15.yaml
+
+model:
+  hidden_size: 512
+  n_layers: 3
+  dropout: 0.4
+  bidirectional: false
+  use_day_layers: false       # the one variable this config isolates; see module docstring above
+  input_dropout: 0.0
+  smoothing_sigma_bins: 2.0
+  patch_size: 14               # unchanged from switchboard_baseline.yaml: patching stays on
+  patch_stride: 4
+
+training:
+  seed: 0
+  max_epochs: 150
+  patience: 150
+  batch_size: 32
+  learning_rate: 0.001
+  grad_clip: 1.0
+  day_layer_penalty: 300.0    # inert: no day layers to anchor when use_day_layers is false
+  amp: true
+  num_workers: 2
+
+logging:
+  wandb_project: b2t-drift
+  wandb_group: model_a_day_layer_control
+  mlflow_experiment: b2t-drift

@@ -69,11 +69,13 @@ Summary above for the one-paragraph version).
 This project trains two distinct models. Conflating their numbers is a
 common, easy mistake: keep them separate in every results table.
 
-- **Model A: official-split pipeline check.** Trained on the official
-  split's `train` partition (all 45 sessions). Confirms our data loading,
-  model, and training code produce a PER on the same scale as published
-  results: a correctness check, not a contribution. Not comparable to
-  Model B (different training data, different scale of task).
+- **Model A: official-split pipeline check, FAILED (2026-10-22).** Trained on the official split's `train` partition (all 45 sessions,
+  all corpora, 8,072 trials); exists to confirm our data loading, GRU/CTC core, patching, and training loop produce a PER on the same
+  scale as published results. Two sequential 150-epoch runs diverged to nearly identical, far-worse-than-prior results regardless of
+  day layers: the shipping configuration (diagonal day layers, substituted for the published checkpoint's full parameterization, which
+  destabilizes at this scale) and a day-layer-off control both reached best val PER ~0.31-0.32, worse than a prior, strictly weaker
+  configuration's 0.2963, ruling out the substitution as the cause (`docs/FINDINGS.md`: "Model A diverges with or without day layers
+  at 45-session scale; the day-layer mechanism is not implicated"). **Does not currently establish pipeline correctness at this scale.** Not comparable to Model B.
 - **Model B: our-split drift model.** Trained on **our split** (section
   2): the temporal cut-point sweep. Its PER curve across held-out
   sessions is the project.

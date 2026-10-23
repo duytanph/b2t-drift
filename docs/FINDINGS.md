@@ -2241,3 +2241,102 @@ docstring (describes the recalibration grid's 7 evaluation sessions
 specifically; measured 2,355, not 2,179). Neither of those two was a
 quantitative claim anything downstream depended on; both were
 illustrative figures inside comments.
+
+---
+
+### Model A diverges with or without day layers at 45-session scale; the day-layer mechanism is not implicated (2026-10-22)
+
+**Question:** Model A (`docs/DESIGN.md` section 3) has two prior attempts
+on record, "Model A's initial result and divergence" (2026-09-08,
+diverged to 0.5009 with full day layers, no patching) and "Task 4: Model
+A retrained without day layers on the official split" (2026-09-09,
+reached 0.2963, day layers off, no patching). Neither used today's
+settled architecture (patching on, diagonal day layers). Does the
+shipping configuration pass, and if not, is the day-layer mechanism
+(never run past 19 active sessions) or something else implicated?
+
+**Pre-registered bands, fixed before either run, not revised after
+seeing a result:** PASS (same scale as published) val PER <= 0.20;
+EQUIVOCAL 0.20-0.25; FAIL val PER > 0.25, OR no clear improvement on the
+prior 0.2963, OR train loss rising at any point during the run.
+Divergence is an automatic fail independent of val PER, per the
+mechanism that killed the 2026-09-08 attempt.
+
+**Method:** Two sequential runs (never in parallel), both on
+`splits/official.json` (8,072 train trials, 1,426 val trials, 45
+sessions, all corpora), both `max_epochs=150`/`patience=150` (Model B's
+convention, not the prior attempts' 100: both prior attempts' best
+epochs, 18 and 47, sit well inside either budget, so the comparison
+stands), both logging val PER every epoch.
+
+- **Run 1, the shipping architecture**
+  (`configs/experiment/switchboard_baseline.yaml`): patching (14/4),
+  diagonal day layers, lambda=300, 3 layers, hidden 512. This is
+  simultaneously a pipeline check and the first test of diagonal day
+  layers at 45 sessions (previously validated only up to 19).
+- **Run 2, the day-layer control**
+  (`configs/experiment/switchboard_baseline_no_day_layers.yaml`): same
+  split, same architecture, same epoch budget, patching ON, day layers
+  OFF entirely: isolating the one variable Run 1 alone cannot separate,
+  and filling the "patching combined with day layers off" gap the
+  2026-09-09 entry named as untried.
+
+**Result: both runs fail, nearly identically, regardless of day layers.**
+
+| | Run 1 (diagonal) | Run 2 (no day layers) |
+|---|---|---|
+| Best val PER | **0.3129** @ epoch 23 | **0.3149** @ epoch 24 |
+| Final val PER (epoch 149) | 0.4699 | 0.4837 |
+| Train loss | falls to ~0.82 by ep17-24, then rises for ~126 consecutive epochs to 2.23 | falls to ~0.78-0.81 by ep23-24, then rises for ~125 consecutive epochs to 1.60 |
+| Total wall time | 6,221.4 s (103.7 min) | 5,661.9 s (94.4 min) |
+| Peak GPU memory | 2,017.2 MB | 2,015.2 MB |
+
+Both best-epoch PERs are **worse than the prior 0.2963** (day layers off,
+no patching), both are far above the published checkpoint's 0.101 and
+our own inference reproduction of it (0.109), and both diverge by the
+same train-loss-rising criterion that failed the 2026-09-08 attempt.
+**FAIL on all three independent criteria, for both runs.**
+
+**Interpretation.** Removing day layers entirely (Run 2) did not fix the
+divergence: best PER, final PER, and the shape and magnitude of the
+train-loss rise are nearly identical with or without the mechanism Run 1
+was specifically testing. **This rules out the day-layer mechanism as the
+cause.** The common factor across both runs, absent from every prior
+successful run (Model B's cut points, s05-s20, and the two 2026-09
+Model A attempts, neither of which combined patching with the full
+45-session/all-corpora/8,072-trial population) is patching at this scale
+and corpus composition, which has only previously been validated stable
+up to 19 active, Switchboard-only sessions. Per the standing instruction
+for this case, **no further investigation was conducted; this is reported
+as evidence, not diagnosed.**
+
+**What this does and does not call into question for Model B.** Model B
+never trains on more than 19 active sessions or on more than 3,336
+trials, and never on all-corpora data: the two cut points that failed
+here (45 sessions, all corpora, 8,072 trials) sit well outside every
+regime Model B's drift curve, attribution analysis, or recalibration grid
+actually exercise. Nothing here threatens the drift curve. It does limit
+how far the "diagonal day layers are stable, full day layers are not"
+conclusion generalizes: it is now confirmed only up to 19 sessions, not
+45, and the untested gap between them is larger than previously assumed.
+
+**Wall-clock, corrected and reconciled.** The pre-registered estimate
+(5.10 ms/trial-epoch from the s15 round-5 comparison, scaled to 8,072
+trials: 41.2 s/epoch x 100 epochs = 4,120 s = 69 min) undercounted actual
+wall time by roughly 35-50%, even using the corrected 150-epoch budget
+(expected ~103 min at the corrected per-epoch rate; measured 103.7 and
+94.4 min). The steady-state rate itself was accurate or better (actual
+~37 s/epoch at steady state vs. ~41 s/epoch predicted): the gap is almost
+entirely front-loaded warmup the extrapolation didn't model: epoch 0
+took 172 s (4.6x steady-state) and epochs 1-10 stayed elevated, consistent
+with cold page-cache across 8,072 distinct trial files spanning 45
+session directories warming up over the first ~10 epochs. Future
+wall-clock estimates at a new trial-count scale should add this warmup
+cost explicitly, not assume steady-state throughout.
+
+**Consequence:** `docs/DESIGN.md` section 3 is updated to state Model A's
+result and what it does and does not establish. No result is added to
+`README.md`'s evidence-of-correctness framing, since neither run passed.
+This entry corrects and extends "Model A's initial result and divergence"
+(2026-09-08) and "Task 4: Model A retrained without day layers on the
+official split" (2026-09-09); those entries are left unchanged.
