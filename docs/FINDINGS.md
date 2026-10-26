@@ -2418,3 +2418,48 @@ or architecture changes are proposed. `docs/DESIGN.md` section 3 is
 updated to its final state. This entry corrects and extends "Model A
 fails at 45-session scale regardless of day layers" (2026-10-22); that
 entry is left unchanged.
+
+**Post-hoc observation; the band is NOT revised.** Model B's own
+validation PER scales with active session count: 0.158 at 4 sessions
+(s05), 0.161 at 9 (s10), 0.169 at 14 (s15), a rate of 0.0016/session
+across the 9-to-14 step. Extrapolated linearly 31 further sessions to
+Model A's 45, this predicts 0.219 against the measured 0.2211, a
+difference of 0.0025. **This is observed after the fact. The
+pre-registered band is NOT revised and the verdict stays EQUIVOCAL.**
+The agreement is a linear extrapolation over 31 sessions from a
+5-session step (more than 6x the span it was measured over), so its
+closeness may be partly coincidental and is not claimed as confirmation.
+What it suggests: the <=0.20 pass band was anchored on Model B's val PER
+at 4-19 sessions without carrying the measured session-count trend out
+to 45, and the miss is better explained by a mis-set band than by a
+broken pipeline. The pre-registration was kept exactly as made so that
+this claim could be checked rather than assumed, not adjusted to fit it.
+
+**Process lesson: `grad_norm_mean` is the leading indicator, and went
+unread.** It was climbing steadily from the earliest epochs in both
+failing full-length runs this round and last (`docs/FINDINGS.md`: "Model
+A fails at 45-session scale regardless of day layers"), logged to
+`metrics.csv` every epoch throughout, and was not examined until after
+four full-length runs and roughly 3.5 hours of GPU time had already been
+spent. A rising `grad_norm_mean` precedes train-loss divergence by many
+epochs; for this failure mode specifically, it is the column to check
+first, ahead of val PER or train loss. This is not a new instrumentation
+gap: `src/b2t_drift/training/loop.py`'s `train_one_epoch` already
+special-cases a transient all-non-finite `grad_norm_mean` (an AMP
+warm-up overflow, returning `nan` rather than a misleading number) from
+an earlier round. The metric has been instrumented correctly both times;
+it simply was not read until the failure it would have flagged early had
+already happened.
+
+**Cross-reference, not reopened.** "The cut-point sweep: calibration-data
+advantage is front-loaded and fades by ~100 days" (2026-09-11) reports
+s05 "destabilizes after ~epoch 115 (train loss and gradient norms rise
+sharply)," attributed there to smaller training sets overfitting. Rising
+TRAIN loss is not overfitting, and that is the same signature diagnosed
+in this entry as a learning-rate transfer problem: the attribution in
+that entry may describe this same mechanism rather than training-set
+size. s05's selected checkpoint is epoch 111, before the destabilization
+begins (~epoch 115), so best-checkpoint selection means nothing in any
+of Model B's reported results is affected either way, regardless of
+which explanation is correct. Not re-run, not re-analyzed here: recorded
+as a cross-reference only.

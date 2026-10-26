@@ -145,9 +145,17 @@ results were tested, not assembled to fit a story.
   recalibration grid, at two sessions. Quantified and corrected: the
   effect on the headline late-session result is +0.0014 PER (sd 0.0024),
   indistinguishable from zero.
-- Our pipeline reaches val PER 0.296 on the official split, against the
-  published baseline's 0.101, attributable to a deliberately smaller
-  architecture (3 layers × 512 hidden vs. the baseline's 5 × 768).
+- Our pipeline's inference path reproduces the published checkpoint
+  almost exactly (0.109 against their reported 0.101), but the training
+  path does not reach the same scale: the official-split pipeline check
+  reaches val PER 0.2211 against a pre-registered pass threshold of
+  <=0.20, so it is reported as equivocal, not a pass. The first attempt
+  at this diverged because a learning rate tuned at roughly 4,200
+  optimizer steps does not transfer to roughly 37,800; lowering it 10x
+  fixed the divergence. 0.2211 matches this project's own session-count
+  trend, extrapolated to 45 sessions, to within about 1%, suggesting the
+  pass threshold itself was set too tight, noted post hoc with the
+  pre-registered threshold left unchanged.
 
 ## What I'd do next
 
@@ -167,6 +175,10 @@ results were tested, not assembled to fit a story.
   configuration runs 3.3x faster per trial (6.31 ms vs. 21.05 ms) at lower
   peak VRAM, so the compute budget for any future sweep is larger than this
   project assumed.
+- Every run here used a flat, hand-tuned learning rate with no scheduler or
+  warmup; a step-based schedule would likely transfer across training-set
+  sizes without retuning, and would plausibly have prevented both Model A's
+  divergence and the earlier Arm 2 learning-rate problem.
 
 ## Data and reproduction
 

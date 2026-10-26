@@ -75,7 +75,7 @@ common, easy mistake: keep them separate in every results table.
   control reproduced the same divergence, ruling out the diagonal-for-full day-layer substitution as the cause. At 10x lower (0.0001), training is
   stable for the full 150 epochs but reaches only val PER **0.2211**: equivocal against the pre-registered bands (pass <=0.20, fail >0.25), not a pass
   (`docs/FINDINGS.md`: "Model A's divergence is a learning-rate transfer problem, not the pipeline; the result is equivocal"). **The failure mode is
-  an optimization instability, not a pipeline defect: localized to the 45-session/all-corpora regime, independent of day layers, outside every regime Model B exercises.** Not comparable to Model B.
+  an optimization instability, not a pipeline defect: localized to the 45-session/all-corpora regime, independent of day layers, outside every regime Model B exercises.** Not comparable to Model B. Post-hoc, not re-registered: Model B's own session-count trend, extrapolated to 45 sessions, predicts 0.219 (`docs/FINDINGS.md`, same entry), close to the measured 0.2211, suggesting the band, not the pipeline, may be mis-set.
 - **Model B: our-split drift model.** Trained on **our split** (section
   2): the temporal cut-point sweep. Its PER curve across held-out
   sessions is the project.
