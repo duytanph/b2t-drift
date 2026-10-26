@@ -40,7 +40,7 @@ the curve's shape.
 
 | Question | Answer | Key numbers |
 |---|---|---|
-| **Measurement** | PER rises steeply for ~150 days, then plateaus. The shape replicates across four independently-trained cut points. | 0.277 → 0.746 over the first 126 days (s05); early/late slope ratio 15–24× (s05, s10, s15) |
+| **Measurement** | PER rises steeply for ~150 days, then plateaus. The shape replicates across four independently-trained cut points. | 0.277 → 0.745 over the first 126 days (s05); early/late slope ratio 15–24× (s05, s10, s15) |
 | **Attribution** | Three mechanisms confirmed, mutually confounded: all three are consequences of one physical process (array micromotion), not independent causes. Channel death ruled out. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Inter-correlated \|ρ\|=0.70–0.90 |
 | **Decision** | Full fine-tuning wins at every elapsed time measured. It slows the decline; it does not restore day-0 function. A minimum viable calibration budget exists, below which recalibrating actively hurts. | Recovers 35–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing) |
 
@@ -49,7 +49,7 @@ the curve's shape.
 **Measurement.** PER (phoneme error rate: edit distance between the
 decoded and true phoneme sequence, the standard metric for this task
 since it isolates the neural decoder from any downstream language model)
-rises from 0.277 two days after calibration to 0.746 by 126 days, with no
+rises from 0.277 two days after calibration to 0.745 by 126 days, with no
 discontinuity in between (a smooth ramp, not a step), then plateaus
 around 0.80–0.84 for the remaining fifteen months. The early-vs-late
 slope ratio is 15–24×, confirmed by training the same architecture at
@@ -113,9 +113,9 @@ results were tested, not assembled to fit a story.
   small affine transform fit to one session's data, standard in this
   literature) would be an essential part of the architecture. **Found:**
   the full-rank version destabilizes joint training across many sessions
-  (val PER 0.353 vs. 0.169 for a much smaller version); constrained to a
+  (val PER 0.332 vs. 0.169 for a much smaller version); constrained to a
   per-channel-only ("diagonal") parameterization, it is nearly free to
-  omit entirely: removing a trained slice costs only −0.004 PER.
+  omit entirely: removing a trained slice costs only −0.0004 PER.
 - **Predicted:** recalibration would help most where drift is worst,
   since that's where there's the most room to recover. **Found:** its
   effectiveness falls sharply with elapsed time instead: the sessions
