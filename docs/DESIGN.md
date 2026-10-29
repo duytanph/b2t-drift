@@ -179,25 +179,25 @@ alone is not thereby protected.
 
 ## 7. Split design and rationale
 
-**Cut-point sweep, not one fixed cut.** Trained separately at sessions
-1–5, 1–10, 1–15, and 1–20 (each losing session 1 to the corpus filter:
-100% 50-Word, zero Switchboard trials), producing four drift curves:
-tests whether the result depends on an arbitrary cut, and measures how
-much calibration data buys drift-resistance. More training sessions
-gives a stronger baseline but a shorter, more recent held-out axis,
-which is why the sweep stops at 1–20. Temporal, not random:
-extrapolation into the future, not interpolation within a shuffled pool.
-Bootstrap CIs are mandatory (early held-out sessions have as few as 80
-trials), and early-stopping data comes from WITHIN the training
-sessions, never held-out ones (`docs/FINDINGS.md`: "Cut-point sweep
-manifests built and validated; a 126-day coverage gap").
+**Cut-point sweep, not one fixed cut.** Trained separately at sessions 1–5, 1–10,
+1–15, and 1–20 (s05/s10/s15 lose only session 1 — 100% 50-Word, zero Switchboard;
+s20 loses three: `t15.2023.08.11`, `.11.04`, `.11.17` — `docs/FINDINGS.md`,
+"Per-session Switchboard counts measured directly"), producing four drift curves:
+tests whether the result depends on an arbitrary cut, and measures how much
+calibration data buys drift-resistance. More training sessions gives a stronger
+baseline but a shorter, more recent held-out axis, which is why the sweep stops at
+1–20. Temporal, not random: extrapolation into the future, not interpolation
+within a shuffled pool. Bootstrap CIs are mandatory (early held-out sessions have
+as few as 80 trials), and early-stopping data comes from WITHIN the training
+sessions, never held-out ones (`docs/FINDINGS.md`: "Cut-point sweep manifests
+built and validated; a 126-day coverage gap").
 
 | cut | train trials | active Switchboard sessions | held-out coverage |
 |---|---:|---:|---|
 | s05 | 908 | 4 | +2 to +597d |
 | s10 | 2,098 | 9 | +2 to +562d |
 | s15 | 3,150 | 14 | +5 to +546d |
-| s20 | 3,336 | 19 | +100 to +513d |
+| s20 | 3,336 | 17 | +100 to +513d |
 
 **The +2-to-+133-day region is a smooth ramp, not a step**: s05's early
 sessions show PER rising from 0.277 at +2d to 0.746 at +126d with no

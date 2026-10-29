@@ -1244,6 +1244,8 @@ detect the rise the old, ceiling-limited architecture could not show.
 
 ### The cut-point sweep: calibration-data advantage is front-loaded and fades by ~100 days (2026-09-11)
 
+**SUPERSEDED by "Per-session Switchboard counts measured directly; s20's active-session count corrected from 19 to 17" (2026-10-28).** Only the "generalization gap scales with active session count" paragraph below is affected: s20's active Switchboard-contributing session count (19) was wrong — the correct count, measured directly from the HDF5 manifest, is 17 (s20 loses three zero-Switchboard sessions, `t15.2023.08.11`/`t15.2023.11.04`/`t15.2023.11.17`, not one). s05=4, s10=9, and s15=14 are confirmed correct and are NOT superseded, and neither is this entry's headline front-loading/fades-by-~100-days result below, which does not depend on session counts. See the new entry for the full per-session breakdown.
+
 **Question:** With the architecture settled (patch 14/4, diagonal day
 layers, λ300), does the s15 drift curve's shape depend on the arbitrary
 choice of a 1-15 training cut, and how much does more calibration data
@@ -2246,6 +2248,8 @@ illustrative figures inside comments.
 
 ### Model A diverges with or without day layers at 45-session scale; the day-layer mechanism is not implicated (2026-10-22)
 
+**PARTIALLY SUPERSEDED by "Per-session Switchboard counts measured directly; s20's active-session count corrected from 19 to 17" (2026-10-28).** Every reference below to "19 active sessions" / "19 sessions" as Model B's maximum (the question, and the Interpretation and "What this does and does not call into question" paragraphs) should read 17, not 19 — s20 loses three zero-Switchboard sessions, not one. This is descriptive context inherited from the now-corrected "cut-point sweep" entry's count, not a number measured in this entry. NOT superseded: this entry's own result (both runs fail nearly identically, day-layer mechanism ruled out) does not depend on the exact session count and is unaffected.
+
 **Question:** Model A (`docs/DESIGN.md` section 3) has two prior attempts
 on record, "Model A's initial result and divergence" (2026-09-08,
 diverged to 0.5009 with full day layers, no patching) and "Task 4: Model
@@ -2346,6 +2350,8 @@ official split" (2026-09-09); those entries are left unchanged.
 ---
 
 ### Model A's divergence is a learning-rate transfer problem, not the pipeline; the result is equivocal (2026-10-23)
+
+**PARTIALLY SUPERSEDED by "Per-session Switchboard counts measured directly; s20's active-session count corrected from 19 to 17" (2026-10-28).** "Model B's val PER at 4-19 sessions" below should read "4-17 sessions" — s20's active-session count was 19, corrected to 17. NOT superseded: the session-count-trend extrapolation itself (0.158/0.161/0.169 at s05/s10/s15 → 0.219 predicted at 45 sessions) uses only s05, s10, and s15 (4, 9, 14 — all confirmed correct), never s20, so the predicted 0.219 and the EQUIVOCAL verdict are unaffected.
 
 **Question:** The previous entry ruled out the day-layer mechanism.
 Model A takes ~252 optimizer steps/epoch (8,072 trials / batch 32)
@@ -2463,3 +2469,81 @@ begins (~epoch 115), so best-checkpoint selection means nothing in any
 of Model B's reported results is affected either way, regardless of
 which explanation is correct. Not re-run, not re-analyzed here: recorded
 as a cross-reference only.
+
+---
+
+### Per-session Switchboard counts measured directly; s20's active-session count corrected from 19 to 17 (2026-10-28)
+
+**Question:** "The cut-point sweep: calibration-data advantage is
+front-loaded and fades by ~100 days" (2026-09-11) states "every cut
+loses session 1 to the corpus filter," giving active Switchboard-
+contributing session counts of s05=4, s10=9, s15=14, s20=19. A user
+cross-check against `figures/corpus_composition_over_time.png` (which
+appeared to show session 1 as ~82% Switchboard, not 0%) and a pytest
+warning naming `t15.2023.11.17` as a zero-trial training session (not
+session 1) conflicted with this claim. Are the per-cut active-session
+counts correct, and is session 1 really the only session any cut loses?
+
+**Method:** Measured labeled (train+val) Switchboard trial counts for
+all 45 sessions directly from the HDF5 manifest (`iter_trial_ids`
+joined against `load_corpus_labels`), independent of the CSV's
+per-block sentence counts. Cross-checked session 1's composition two
+ways: from `data/external/t15_copyTaskData_description.csv` directly,
+and from the HDF5-manifest join; both must agree given the CSV's
+label-vs-count rule (`docs/FINDINGS.md`: "Corpus CSV trial counts are
+unreliable; the manifest is authoritative"). Recomputed each cut
+point's active-session count directly from `build_temporal_split`'s own
+`train_sessions` output (count of `n_trials > 0` entries), not by
+reasoning about it. Separately rendered `figures/corpus_composition_
+over_time.png` and inspected it directly to locate the source of the
+apparent contradiction.
+
+**Result:** Session 1 (`t15.2023.08.11`) is 100% 50-Word, 0%
+Switchboard, confirmed identically by the CSV (7/7 blocks labeled
+`50-Word`) and the HDF5 manifest (288/288 trials). The "session 1 is
+100% 50-Word" claim itself is CORRECT. Two zero-Switchboard sessions
+exist that the original entry missed: `t15.2023.11.04` (index 18,
+session 19) and `t15.2023.11.17` (index 19, session 20) — both fall
+inside the s20 (1-20) training block, both 0 of their labeled trials
+Switchboard (95 and 125 total trials respectively, all unlabeled by any
+tracked corpus). Recomputed active-session counts directly from
+`build_temporal_split`: s05=4, s10=9, s15=14 (all confirmed correct —
+each of these three blocks loses only session 1), **s20=17, not 19**
+(loses session 1, 19, and 20). The figure discrepancy that prompted this
+check was a rendering bug, not a data error: `scratch/investigate_
+corpus_composition.py` draws each corpus's stacked bars at true session
+dates with a hardcoded `width=3.0` days; session 1 (`08-11`) and session
+2 (`08-13`) are only 2 days apart, so session 2's bar (15.4% 50-Word,
+84.6% Switchboard — almost exactly what the apparent "first bar" showed)
+overlapped and was drawn on top of session 1's, since Switchboard sorts
+last and is drawn last. Fixed separately (see `tools/investigate_corpus_
+composition.py`, moved from `scratch/` so the committed figure has a
+reproducible, version-controlled source).
+
+**Consequence:** The pytest warning naming `t15.2023.11.17` was correct
+and not actually in conflict with "session 1 is 100% 50-Word" — both are
+true; the entry's "every cut loses only session 1" was an unwarranted
+generalization from s05/s10/s15 to s20. **What does NOT change:** the
+generalization-gap argument in the superseded entry is built entirely on
+s05 (4), s10 (9), and s15 (14) — all three confirmed correct here — and
+s20 was already treated there as ambiguous and excluded from that
+argument ("s20 neither confirms nor refutes the session-count reading").
+Nothing about that argument's conclusion moves. Likewise `docs/DESIGN.md`
+section 7's "at least 8 of 30 held-out sessions have zero Switchboard
+trials" (the s15 held-out set) is independently confirmed correct by
+this same per-session count (8 zero-Switchboard sessions among indices
+15-44). `docs/DESIGN.md` section 7's table and prose are corrected to
+17 in place, since DESIGN.md states current decisions rather than a
+dated record.
+
+**Addendum: two more entries carried the same inherited figure.** A
+broader grep (not limited to the original "session 1" wording) found
+"19 active sessions" / "19 sessions" also used, as descriptive context
+rather than a measured result, in "Model A diverges with or without day
+layers at 45-session scale; the day-layer mechanism is not implicated"
+(2026-10-22) and "Model A's divergence is a learning-rate transfer
+problem, not the pipeline; the result is equivocal" (2026-10-23). Both
+are marked `PARTIALLY SUPERSEDED` in place, scoped the same way as
+above: in both cases the entry's own measured result does not depend on
+the session count and is unaffected, only a descriptive mention of
+Model B's max active-session count is wrong (19 -> 17).
