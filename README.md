@@ -41,7 +41,7 @@ the curve's shape.
 | Question | Answer | Key numbers |
 |---|---|---|
 | **Measurement** | PER rises steeply for ~150 days, then plateaus. The shape replicates across four independently-trained cut points. | 0.277 → 0.745 over the first 126 days (s05); early/late slope ratio 15–24× (s05, s10, s15) |
-| **Attribution** | Three mechanisms confirmed, mutually confounded: all three are consequences of one physical process (array micromotion), not independent causes. Channel death ruled out. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Inter-correlated \|ρ\|=0.70–0.90 |
+| **Attribution** | Three mechanisms confirmed and quantified; channel death ruled out. The three are collinear in elapsed time, so this design cannot rank them against each other. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Pairwise \|ρ\|=0.70–0.90, falling to ≤0.32 and non-significant once elapsed time is controlled for (n=27) |
 | **Decision** | Full fine-tuning wins at every elapsed time measured. It slows the decline; it does not restore day-0 function. A minimum viable calibration budget exists, below which recalibrating actively hurts. | Recovers 35–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing) |
 
 (Also in `results/summary_table.csv`.)
