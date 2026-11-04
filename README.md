@@ -42,7 +42,7 @@ statistics does not change the curve's shape.
 | Question | Answer | Key numbers |
 |---|---|---|
 | **Measurement** | PER rises steeply for ~150 days, then plateaus. The shape replicates across four independently-trained cut points. | 0.277 → 0.745 over the first 126 days (s05); early/late slope ratio 15–24× (s05, s10, s15) |
-| **Attribution** | Channel death is ruled out. Three mechanisms are confirmed instead: signal-to-noise loss, phoneme tuning change, and subspace rotation. All three are collinear in elapsed time, so this design cannot rank them against each other. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Pairwise \|ρ\|=0.70–0.90, falling to ≤0.32 and non-significant once elapsed time is controlled for (n=27) |
+| **Attribution** | Channel death is ruled out. Three mechanisms are confirmed instead: signal-to-noise loss, phoneme tuning change, and subspace rotation. All three track elapsed time closely, so this design cannot rank them against each other. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Pairwise \|ρ\|=0.70–0.90, falling to ≤0.32 and non-significant once elapsed time is controlled for (n=27) |
 | **Decision** | Full fine-tuning wins at every elapsed time measured. It slows the decline; it does not restore day-0 function. A minimum viable calibration budget exists, below which recalibrating actively hurts. | Recovers 35–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing) |
 
 (Also in `results/summary_table.csv`.)
@@ -72,14 +72,15 @@ session's phoneme-to-channel mapping and a reference mapping decays at
 low-firing-rate channels. Subspace rotation: the population activity
 manifold rotates at 3.17°/100 days, independent of channel health, and
 tracks PER as tightly as any measurement in this project (Spearman
-ρ=0.908). All three are inter-correlated at \|ρ\|=0.70–0.90. Each is
-also strongly monotone in elapsed time, so that correlation is expected
-whether one shared process or several concurrent ones drive them: it
-establishes that the three are collinear and cannot be ranked against
-each other, not that a single cause produced them. Array micromotion is
-the mechanism in the chronic-recording literature that would produce
-all three at once, and it is the most parsimonious reading, but nothing
-in this dataset measures array position.
+ρ=0.908). All three are inter-correlated at \|ρ\|=0.70–0.90. Each is also
+strongly monotone in elapsed time, so that correlation is expected
+whether one shared process or several concurrent ones drive them. All
+three are close to being monotone functions of the same variable,
+elapsed days, which is why this design cannot rank them against each
+other, not evidence that a single cause produced them. Array
+micromotion is the mechanism in the chronic-recording literature that
+would produce all three at once, and it is the most parsimonious
+reading, but nothing in this dataset measures array position.
 
 **Decision.** Of four recalibration strategies tested (no adaptation,
 unsupervised feature alignment, a small per-session input layer, and full

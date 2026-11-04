@@ -114,7 +114,7 @@ def _draw_top(ax, drift_by_cut: dict[str, list[dict]]) -> None:
 
     legend = [
         Line2D([0], [0], color=BLUE, linewidth=1.6, marker="o", markersize=8,
-               markeredgecolor=SURFACE, label="s05 (emphasized): held-out session (>=50 trials)"),
+               markeredgecolor=SURFACE, label="s05 (emphasized): held-out session (≥50 trials)"),
         Line2D([0], [0], marker="D", color=SURFACE, markeredgecolor=ORANGE, markersize=8,
                markeredgewidth=1.8, linewidth=0, label="s05 below 50-trial threshold (excluded from fits)"),
         Line2D([0], [0], color=CONTEXT_BLUE, linewidth=1.6,
@@ -130,7 +130,7 @@ def _draw_top(ax, drift_by_cut: dict[str, list[dict]]) -> None:
               ncol=2, columnspacing=1.2, handlelength=1.8, handletextpad=0.6, labelspacing=0.5)
 
     ax.set_ylabel("phoneme error rate (PER)", fontsize=14)
-    ax.set_title("The decoder degrades steeply, then plateaus - at all four cut points",
+    ax.set_title("The decoder degrades steeply, then plateaus (at all four cut points)",
                  loc="left", fontsize=17, fontweight="bold", pad=10)
     ax.set_ylim(0.05, 1.0)
     ax.set_yticks([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])

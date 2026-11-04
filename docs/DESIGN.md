@@ -165,15 +165,15 @@ drift is removed from view by stages 1–2 and cannot be studied here.
 | Tuning change | **CONFIRMED, survives the healthy-channel control**: correlation decays −0.056/100d regardless of excluding dying/low-rate channels | "Tuning change confirmed via CTC forward-backward..." |
 | Subspace rotation | **CONFIRMED, survives the control, tracks PER at ρ=0.908**: as tightly as tuning change, not more | "Subspace rotation confirmed..." |
 
-**Drift is multi-causal; this design cannot rank the three confirmed mechanisms.**
-They are inter-correlated at |ρ| 0.70–0.90, but each is also strongly monotone in
-elapsed time; partialling out days-since-cut drops all three pairwise correlations to
-|ρ| <= 0.32, none significant (n=27, `docs/FINDINGS.md`: "Raw inter-mechanism
-correlation is confounded by a shared time trend..."). This establishes collinearity,
-not a shared cause: array micromotion is the most parsimonious reading, but nothing
-in this dataset measures array position. SBP magnitude alone stands apart,
-uncorrelated with everything else (all p>0.23): it resists the shared process better
-at the feature level, though a decoder built from it alone is not thereby protected.
+**Drift is multi-causal; this design cannot rank the three confirmed mechanisms.** They are
+inter-correlated at |ρ| 0.70–0.90, but each is also strongly monotone in elapsed time;
+partialling out days-since-cut drops all three pairwise correlations to |ρ| <= 0.32, none
+significant (n=27, `docs/FINDINGS.md`: "Raw inter-mechanism correlation is confounded by a
+shared time trend..."). This establishes that all three are near-monotone functions of
+elapsed time, not a shared cause: array micromotion is the most parsimonious reading, but
+nothing in this dataset measures array position. SBP magnitude alone stands apart,
+uncorrelated with everything else (all p>0.23): it resists the shared process better at the
+feature level, though a decoder built from it alone is not thereby protected.
 
 ---
 
