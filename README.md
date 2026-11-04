@@ -28,13 +28,14 @@ Three questions, in increasing order of how much they matter practically:
 ![Headline figure: the decoder degrades steeply then plateaus, and recalibration's power to fix that degradation collapses right along with it](figures/headline.png)
 
 The decoder's accuracy collapses over the first five months and then
-holds roughly flat (top); full fine-tuning on a handful of new-day
+holds roughly flat, replicated across all four independently-trained cut
+points (top, s05/s10/s15/s20); full fine-tuning on a handful of new-day
 sentences recovers a large share of that loss early on, but its ceiling
-falls just as sharply as the decoder itself degrades (bottom). The four
-sessions below the 50-trial viability threshold (hollow markers, top) are
-shown rather than dropped; they sit on the same trajectory as their
-neighbors, so excluding them from the fitted statistics does not change
-the curve's shape.
+falls just as sharply as the decoder itself degrades (bottom, s05 only).
+The four s05 sessions below the 50-trial viability threshold (hollow
+markers, top) are shown rather than dropped; they sit on the same
+trajectory as their neighbors, so excluding them from the fitted
+statistics does not change the curve's shape.
 
 ## What I found
 
@@ -55,10 +56,10 @@ around 0.80–0.84 for the remaining fifteen months. The early-vs-late
 slope ratio is 15–24×, confirmed by training the same architecture at
 three independent cut points in the recording (s05/s10/s15: a fourth,
 s20, starts too late to observe the early climb, which is a coverage gap
-in that comparison, not a contradiction of it). The best held-out PER
-measured anywhere in the sweep is 0.177, five days after the largest
-training block (s15). More calibration data buys a better starting
-point, but not a flatter curve past the first few months.
+in that comparison, not a contradiction of it). Across cut points, more calibration data lowers the starting point
+without flattening the curve: s15's earliest held-out session sits at
+0.177 against s05's 0.277, and by ~100 days all four cuts fall within
+0.032 of each other despite a 3.7x range in training-set size.
 
 **Attribution.** Channel death is ruled out: only 2 of 256 electrodes
 crossed below a 2 Hz firing-rate floor and stayed there over 611 days,
