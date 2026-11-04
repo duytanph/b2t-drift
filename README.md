@@ -71,10 +71,14 @@ session's phoneme-to-channel mapping and a reference mapping decays at
 low-firing-rate channels. Subspace rotation: the population activity
 manifold rotates at 3.17°/100 days, independent of channel health, and
 tracks PER as tightly as any measurement in this project (Spearman
-ρ=0.908). All three are inter-correlated at \|ρ\|=0.70–0.90: the
-signature of one shared physical cause (the electrode array shifting in
-tissue) producing three effects at once, not sloppy measurement. This
-design cannot rank them against each other.
+ρ=0.908). All three are inter-correlated at \|ρ\|=0.70–0.90. Each is
+also strongly monotone in elapsed time, so that correlation is expected
+whether one shared process or several concurrent ones drive them: it
+establishes that the three are collinear and cannot be ranked against
+each other, not that a single cause produced them. Array micromotion is
+the mechanism in the chronic-recording literature that would produce
+all three at once, and it is the most parsimonious reading, but nothing
+in this dataset measures array position.
 
 **Decision.** Of four recalibration strategies tested (no adaptation,
 unsupervised feature alignment, a small per-session input layer, and full

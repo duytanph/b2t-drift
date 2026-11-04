@@ -2547,3 +2547,75 @@ are marked `PARTIALLY SUPERSEDED` in place, scoped the same way as
 above: in both cases the entry's own measured result does not depend on
 the session count and is unaffected, only a descriptive mention of
 Model B's max active-session count is wrong (19 -> 17).
+
+---
+
+### Raw inter-mechanism correlation is confounded by a shared time trend; it disappears once days-since-cut is partialled out (2026-11-03)
+
+**Question:** `docs/DESIGN.md` section 6 and `README.md`'s Attribution
+paragraph both state the three confirmed drift mechanisms (SNR loss,
+tuning change, subspace rotation) are "inter-correlated at |ρ|=0.70-0.90,"
+read as "the signature of one shared physical cause... producing three
+effects at once, not sloppy measurement." Where does that figure actually
+come from, and does it survive controlling for the one obvious confound:
+all three measures are themselves strongly monotone in elapsed time, so
+two time-trending series correlate with each other whether or not they
+share a cause.
+
+**Source of the original figure.** No FINDINGS entry computed a true
+pairwise inter-mechanism correlation under this framing. The number was
+assembled from three SEPARATE entries, each reporting one mechanism's own
+Spearman correlation AGAINST THE s05 PER CURVE, not against each other:
+"SNR loss confirmed at the feature level..." (TX vs PER, rho=-0.750,
+p=6.8e-6), "Tuning change confirmed via CTC forward-backward..." (tuning
+vs PER, rho=-0.898 to -0.903, stated inline in the next entry), and
+"Subspace rotation confirmed, and it tracks PER as tightly as tuning
+change" (rotation vs PER, rho=0.908, p=6.3e-11). The per-session arrays
+needed to compute the ACTUAL pairwise correlation existed only in a
+gitignored `scratch/task_f2_summary.json` (byproduct of
+`scratch/task_f_attribution_verdict.py`), never surfaced as its own
+result.
+
+**Method.** `tools/attribution_partial_correlation.py` (new, reading that
+same per-session array: tx_norm, corr_all i.e. tuning-correlation-to-s05-
+reference, and angle_values i.e. subspace-angle-to-s05-reference, all
+matched to the s05 PER curve's 27 passing held-out sessions, days 2-597).
+Computed Spearman correlation for each of the three mechanism pairs,
+raw and with days-since-cut partialled out (rank-transform all series,
+regress ranked mechanism values on ranked days, Pearson-correlate the
+residuals — cross-checked against the standard partial-correlation
+formula applied to the raw Spearman rhos; the two methods agree exactly).
+Unit of observation: per held-out session (n=27 for every pair, same
+index throughout — TX/SBP normalized to session 1's own value, tuning
+and rotation each measured as distance to an s05-training-block-pooled
+reference; different baselines, but the same 27-session index for all
+three, so this is not the per-session-PAIR vs. per-session mismatch that
+affects some of this project's other correlation measurements).
+
+**Result: raw correlations reproduce the quoted range exactly.**
+
+| Pair | Raw Spearman ρ | p | 95% CI | Partial ρ (controlling for days) | p | 95% CI |
+|---|---|---|---|---|---|---|
+| SNR (TX) vs tuning | +0.739 | 1.1e-5 | [0.500, 0.874] | +0.110 | 0.586 | [-0.290, 0.477] |
+| SNR (TX) vs rotation | -0.699 | 5.0e-5 | [-0.853, -0.434] | -0.070 | 0.728 | [-0.445, 0.326] |
+| Tuning vs rotation | -0.903 | 1.2e-10 | [-0.955, -0.796] | -0.322 | 0.102 | [-0.630, 0.075] |
+
+n=27 for every cell. **All three partial correlations collapse toward
+zero and lose significance** (p=0.586, 0.728, 0.102): two of three have
+|partial ρ| < 0.3 outright, and the third (tuning vs rotation, 0.322) is
+not significant either, independently satisfying the same "no residual
+association" reading. None of the three partial 95% CIs excludes zero.
+
+**Consequence: this is a BRANCH B result, not Branch A.** The raw
+|ρ|=0.70-0.90 range is real and reproducible, but it is exactly what
+three mechanisms that are each strongly monotone in elapsed time would
+produce whether or not they share a cause — it establishes that the
+three mechanisms are collinear and cannot be ranked against each other,
+which is the claim this design can actually support; it is weak evidence
+for "one shared physical cause," which the raw number alone cannot
+distinguish from three concurrent, independently-time-trending processes.
+`README.md`'s Attribution paragraph and `docs/DESIGN.md` section 6 are
+both corrected to this weaker, now partial-correlation-informed reading;
+neither previously stated only "cannot be ranked" (both asserted the
+shared-cause reading as the signature the data showed), so both needed
+the correction, not just a confirmation.
