@@ -90,7 +90,7 @@ common, easy mistake: keep them separate in every results table.
 - **MEASUREMENT**: How fast does PER degrade as a function of days since
   calibration?
 - **ATTRIBUTION**: Why does it degrade? See section 6 for the three
-  candidate causes.
+  measured changes examined.
 - **DECISION**: Given a fixed budget of participant time on a new day,
   what is the best thing to spend it on? See section 5 for the candidate
   interventions ("arms").
@@ -157,17 +157,17 @@ drift is removed from view by stages 1–2 and cannot be studied here.
 
 **Attribution verdict (Phase 2 complete):**
 
-| Mechanism | Verdict | FINDINGS.md pointer |
+| Measured change | Verdict | FINDINGS.md pointer |
 |---|---|---|
 | Channel death | **RULED OUT**: 2/256 channels crossed below 2 Hz and stayed, both at the final session; population trend n.s. (p=0.131) | "Channel death across 45 sessions: ruled out" |
 | SNR loss | **CONFIRMED at the feature level** (TX declines 26× faster than SBP, p=3.0e-6 gap widening) **but not at the decoder level**: TX/SBP are redundant (median pair r=0.72, stable across 611d), so an SBP-only decoder is not more drift-resistant | "SNR loss confirmed...", "SBP-only is not more drift-resistant..." |
 | Tuning change | **CONFIRMED, survives the healthy-channel control**: correlation decays −0.056/100d regardless of excluding dying/low-rate channels | "Tuning change confirmed via CTC forward-backward..." |
 | Subspace rotation | **CONFIRMED, survives the control, tracks PER at ρ=0.908**: as tightly as tuning change, not more | "Subspace rotation confirmed..." |
 
-**Drift is multi-causal; this design cannot rank the three confirmed mechanisms.** They are
+**Drift is multi-causal; this design cannot rank the three confirmed measured changes.** They are
 inter-correlated at |ρ| 0.70–0.90, but each is also strongly monotone in elapsed time;
 partialling out days-since-cut drops all three pairwise correlations to |ρ| <= 0.32, none
-significant (n=27, `docs/FINDINGS.md`: "Raw inter-mechanism correlation is confounded by a
+significant (n=27, `docs/FINDINGS.md`: "Raw cross-measure correlation is confounded by a
 shared time trend..."). This establishes that all three are near-monotone functions of
 elapsed time, not a shared cause: array micromotion is the most parsimonious reading, but
 nothing in this dataset measures array position. SBP magnitude alone stands apart,

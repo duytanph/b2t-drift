@@ -1,21 +1,21 @@
-"""Standalone diagnostic: are the three confirmed drift mechanisms actually
+"""Standalone diagnostic: are the three confirmed measured changes actually
 inter-correlated with EACH OTHER, or only each separately correlated with
 the PER curve (which is itself monotone in time, making correlation among
 time-monotone series close to guaranteed regardless of a shared cause)?
 
-docs/DESIGN.md section 6 states the three confirmed attribution mechanisms
+docs/DESIGN.md section 6 states the three confirmed measured changes
 (SNR loss, tuning change, subspace rotation) are "inter-correlated at
 |rho|=0.70-0.90." No FINDINGS.md entry actually computed a pairwise
-inter-mechanism correlation under that framing -- the number was built from
-three SEPARATE entries, each reporting one mechanism's own Spearman
+inter-measure correlation under that framing -- the number was built from
+three SEPARATE entries, each reporting one measured change's own Spearman
 correlation AGAINST THE s05 PER CURVE (SNR/TX: rho=-0.750; tuning:
 rho=-0.898 to -0.903; rotation: rho=0.908), not against each other. This
 tool computes what was actually implied (raw pairwise correlation between
-the three mechanisms' own per-session measures) and, since all three trend
+the three measured changes' own per-session values) and, since all three trend
 with elapsed time, what matters more: the SAME pairwise correlations with
 days-since-cut partialled out, which is the only way to tell whether the
 three move together beyond their shared time trend. See docs/FINDINGS.md:
-"Raw inter-mechanism correlation is confounded by a shared time trend; it
+"Raw cross-measure correlation is confounded by a shared time trend; it
 disappears once days-since-cut is partialled out" for the investigation
 this script resulted from.
 
@@ -49,8 +49,8 @@ from scipy import stats
 
 DEFAULT_INPUT = Path("scratch/task_f2_summary.json")
 
-# (display name, mechanism-A key, mechanism-B key) -- the three pairs among
-# the project's three CONFIRMED attribution mechanisms. "tx_norm" (SNR loss)
+# (display name, measure-A key, measure-B key) -- the three pairs among
+# the project's three CONFIRMED attribution measured changes. "tx_norm" (SNR loss)
 # and "corr_all" (tuning change) both DECLINE with drift; "angle_values"
 # (subspace rotation) INCREASES with drift -- signs below are reported as
 # measured, not flipped to a common convention.
@@ -142,12 +142,12 @@ def main() -> None:
 
     print(f"n = {n} (matched s05 held-out sessions, days-since-cut {days.min():.0f}-{days.max():.0f})")
 
-    print("\n=== Sanity check: each mechanism's own correlation against PER ===")
+    print("\n=== Sanity check: each measured change's own correlation against PER ===")
     for name, s in series.items():
         rho, p = stats.spearmanr(s, per)
         print(f"  {name} vs PER: Spearman rho={rho:.4f}, p={p:.3g}")
 
-    print("\n=== RAW pairwise inter-mechanism correlations (Spearman) ===")
+    print("\n=== RAW pairwise inter-measure correlations (Spearman) ===")
     for label, key_a, key_b in PAIRS:
         rho, p = stats.spearmanr(series[key_a], series[key_b])
         lo, hi = _fisher_ci(rho, n, k=0, alpha=args.alpha)

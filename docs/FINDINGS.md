@@ -1222,7 +1222,7 @@ wrong-per-commitment at +5 days (mean 0.428 across the old 22-session
 curve), near its own floor on that axis, with almost nowhere further
 to degrade except into deletions. **The flatness was a ceiling artifact
 of a decoder that started out already bad on this axis, not a real
-property of the underlying drift mechanism.** The settled decoder starts
+property of drift itself.** The settled decoder starts
 at 12.6% (a real margin above its own floor) and visibly degrades on
 both axes as elapsed time grows.
 
@@ -1232,7 +1232,7 @@ shifting phoneme-to-channel mapping, reflected in rising
 substitution-among-emitted) contribute, not SNR loss alone.** This
 makes Phase 2's planned diagnostics (channel mortality, phoneme-tuning
 matrices, subspace-angle measurements; `docs/DESIGN.md` section 6)
-**more necessary, not less**: there are now two mechanisms to separate
+**more necessary, not less**: there are now two measured changes to separate
 and attribute, rather than one to confirm. The methodological point from
 the superseded entry is unchanged: normalizing substitutions by
 reference length is confounded with emission rate, and
@@ -1679,7 +1679,7 @@ s05 PER curve (27 matched sessions): **Spearman rho=0.908, p=6.3e-11**.
 tuning change's own correlation with PER (rho=-0.898 to -0.903, depending
 on channel restriction, previous entry). With 27 sessions, 0.908 and
 0.90 are statistically indistinguishable.** Both track PER equally
-tightly; this is part of why the underlying mechanisms cannot be ranked
+tightly; this is part of why the underlying measured changes cannot be ranked
 against each other by correlation strength (`docs/DESIGN.md` section 6).
 
 **Consequence for Arm 1.** Rotation is large, statistically robust, and,
@@ -1747,7 +1747,7 @@ rotation, both confirmed to affect the whole 512-dim population, not a
 TX-specific effect) degrades the other's too, even though TX's own raw
 FEATURE MAGNITUDE happens to decline faster. The feature-level SNR-loss
 prediction is about raw signal amplitude; the decoder-level result is
-dominated by the other two mechanisms (tuning change, subspace rotation),
+dominated by the other two measured changes (tuning change, subspace rotation),
 which do not distinguish TX from SBP. Figure:
 `figures/tx_sbp_pair_correlation.png`.
 
@@ -2552,10 +2552,10 @@ Model B's max active-session count is wrong (19 -> 17).
 
 ---
 
-### Raw inter-mechanism correlation is confounded by a shared time trend; it disappears once days-since-cut is partialled out (2026-11-03)
+### Raw cross-measure correlation is confounded by a shared time trend; it disappears once days-since-cut is partialled out (2026-11-03)
 
 **Question:** `docs/DESIGN.md` section 6 and `README.md`'s Attribution
-paragraph both state the three confirmed drift mechanisms (SNR loss,
+paragraph both state the three confirmed measured changes (SNR loss,
 tuning change, subspace rotation) are "inter-correlated at |ρ|=0.70-0.90,"
 read as "the signature of one shared physical cause... producing three
 effects at once, not sloppy measurement." Where does that figure actually
@@ -2565,8 +2565,8 @@ two time-trending series correlate with each other whether or not they
 share a cause.
 
 **Source of the original figure.** No FINDINGS entry computed a true
-pairwise inter-mechanism correlation under this framing. The number was
-assembled from three SEPARATE entries, each reporting one mechanism's own
+pairwise inter-measure correlation under this framing. The number was
+assembled from three SEPARATE entries, each reporting one measured change's own
 Spearman correlation AGAINST THE s05 PER CURVE, not against each other:
 "SNR loss confirmed at the feature level..." (TX vs PER, rho=-0.750,
 p=6.8e-6), "Tuning change confirmed via CTC forward-backward..." (tuning
@@ -2582,9 +2582,9 @@ result.
 same per-session array: tx_norm, corr_all i.e. tuning-correlation-to-s05-
 reference, and angle_values i.e. subspace-angle-to-s05-reference, all
 matched to the s05 PER curve's 27 passing held-out sessions, days 2-597).
-Computed Spearman correlation for each of the three mechanism pairs,
+Computed Spearman correlation for each of the three measured-change pairs,
 raw and with days-since-cut partialled out (rank-transform all series,
-regress ranked mechanism values on ranked days, Pearson-correlate the
+regress each measured change's ranks on ranked days, Pearson-correlate the
 residuals — cross-checked against the standard partial-correlation
 formula applied to the raw Spearman rhos; the two methods agree exactly).
 Unit of observation: per held-out session (n=27 for every pair, same
@@ -2610,9 +2610,9 @@ association" reading. None of the three partial 95% CIs excludes zero.
 
 **Consequence: this is a BRANCH B result, not Branch A.** The raw
 |ρ|=0.70-0.90 range is real and reproducible, but it is exactly what
-three mechanisms that are each strongly monotone in elapsed time would
+three measured changes that are each strongly monotone in elapsed time would
 produce whether or not they share a cause — it establishes that the
-three mechanisms are collinear and cannot be ranked against each other,
+three measured changes are collinear and cannot be ranked against each other,
 which is the claim this design can actually support; it is weak evidence
 for "one shared physical cause," which the raw number alone cannot
 distinguish from three concurrent, independently-time-trending processes.

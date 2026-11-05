@@ -42,7 +42,7 @@ statistics does not change the curve's shape.
 | Question | Answer | Key numbers |
 |---|---|---|
 | **Measurement** | PER rises steeply for ~150 days, then plateaus. The shape replicates across four independently-trained cut points. | 0.277 → 0.745 over the first 126 days (s05); early/late slope ratio 15–24× (s05, s10, s15) |
-| **Attribution** | Channel death is ruled out. Three mechanisms are confirmed instead: signal-to-noise loss, phoneme tuning change, and subspace rotation. All three track elapsed time closely, so this design cannot rank them against each other. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Pairwise \|ρ\|=0.70–0.90, falling to ≤0.32 and non-significant once elapsed time is controlled for (n=27) |
+| **Attribution** | Channel death is ruled out. Three measured changes are confirmed instead: signal-to-noise loss, phoneme tuning change, and subspace rotation. All three track elapsed time closely, so this design cannot rank them against each other. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Pairwise \|ρ\|=0.70–0.90, falling to ≤0.32 and non-significant once elapsed time is controlled for (n=27) |
 | **Decision** | Full fine-tuning wins at every elapsed time measured, does not restore day-zero function, and a minimum viable budget exists below which recalibrating hurts. Both the signal and the method limit recovery, and this design cannot separate their contributions. | Recovers 31–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing). Matched-decoder Switchboard PER: 0.199 early → 0.356 late (+78.8%). Headroom: +597d full fine-tuning reaches 0.718 vs. 0.356 for a better-resourced decoder on the same sessions |
 
 (Also in `results/summary_table.csv`.)
@@ -63,8 +63,10 @@ without flattening the curve: s15's earliest held-out session sits at
 
 **Attribution.** Channel death is ruled out: only 2 of 256 electrodes
 crossed below a 2 Hz firing-rate floor and stayed there over 611 days,
-and the trend is not significant (p=0.131). Three mechanisms are
-confirmed instead. SNR loss: threshold-crossing counts (TX, a per-bin
+and the trend is not significant (p=0.131). Three measured changes are
+confirmed instead: these are measured changes in the recorded features,
+not identified physical processes, and the process that would produce
+all three is not established here. SNR loss: threshold-crossing counts (TX, a per-bin
 spike count) decline 26× faster than spike-band power (SBP, continuous
 power in the same band). Tuning change: the correlation between a
 session's phoneme-to-channel mapping and a reference mapping decays at
@@ -117,7 +119,7 @@ collect once but how often, and how cheaply, to top up.
 ## What contradicted my predictions
 
 Four places where the data said something different from what the
-mechanism would predict: the strongest evidence in this repo that these
+underlying story would predict: the strongest evidence in this repo that these
 results were tested, not assembled to fit a story.
 
 - **Predicted:** an SBP-only decoder would be more drift-resistant than a
@@ -156,7 +158,7 @@ results were tested, not assembled to fit a story.
   published** and cannot be controlled for.
 - **ALS progression is indistinguishable from electrode degradation** in
   this dataset: a change in PER could reflect either.
-- **The three attribution mechanisms are confounded** (\|ρ\|=0.70–0.90)
+- **The three measured changes behind attribution are confounded** (\|ρ\|=0.70–0.90)
   and this design cannot rank or separate them.
 - **The recovery-fraction reference (0.158) is validation PER measured
   inside the training sessions**, not a true held-out day-zero session
