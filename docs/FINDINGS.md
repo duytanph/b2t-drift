@@ -2182,6 +2182,8 @@ line itself, which is now also done here.
 
 ### At the real median length, batch=64 does not fit in 8 GB; it silently spills through WDDM (2026-10-22)
 
+**PARTIALLY SUPERSEDED by "The ceiling was data-limited, not signal-limited; Arm 3b has real headroom" (2026-11-05)'s companion fix to `docs/DESIGN.md` section 8.** Only the implication that batch=64 is unusable FOR THIS PROJECT'S MODEL is affected: the benchmark's `batch=64` spill figures below (9,527 MB, the 22.3x slowdown) were measured on the "baseline" 5L/1024H config -- the published paper's architecture, not this project's own 3L/512H one, which uses 3,411 MB at batch=64 in fp32 and does not spill (re-measured, same entry). The spill MECHANISM itself (WDDM silently spilling to system RAM with no `OutOfMemoryError`, rather than raising one) and the N=100 full-batch observation in `training/loop.py`'s docstring (26x slowdown, N=100 vs. N=10, during the real recalibration grid) are NOT superseded -- both are real and independent of which architecture this entry's own benchmark happened to measure.
+
 **Question:** "GPU compute is not a constraint on model size" (2026-09-01)
 benchmarked at `seq_len=527`, the session-1 statistic since corrected to
 the true median 845 (previous entry). Its headline, "no OOM risk even at

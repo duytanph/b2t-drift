@@ -43,7 +43,7 @@ statistics does not change the curve's shape.
 |---|---|---|
 | **Measurement** | PER rises steeply for ~150 days, then plateaus. The shape replicates across four independently-trained cut points. | 0.277 → 0.745 over the first 126 days (s05); early/late slope ratio 15–24× (s05, s10, s15) |
 | **Attribution** | Channel death is ruled out. Three mechanisms are confirmed instead: signal-to-noise loss, phoneme tuning change, and subspace rotation. All three track elapsed time closely, so this design cannot rank them against each other. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Pairwise \|ρ\|=0.70–0.90, falling to ≤0.32 and non-significant once elapsed time is controlled for (n=27) |
-| **Decision** | Full fine-tuning wins at every elapsed time measured. It slows the decline; it does not restore day-0 function. A minimum viable calibration budget exists, below which recalibrating actively hurts. | Recovers 35–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing) |
+| **Decision** | Full fine-tuning wins at every elapsed time measured, does not restore day-zero function, and a minimum viable budget exists below which recalibrating hurts. Both the signal and the method limit recovery, and this design cannot separate their contributions. | Recovers 31–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing). Matched-decoder Switchboard PER: 0.199 early → 0.356 late (+78.8%). Headroom: +597d full fine-tuning reaches 0.718 vs. 0.356 for a better-resourced decoder on the same sessions |
 
 (Also in `results/summary_table.csv`.)
 
@@ -82,19 +82,37 @@ micromotion is the mechanism in the chronic-recording literature that
 would produce all three at once, and it is the most parsimonious
 reading, but nothing in this dataset measures array position.
 
-**Decision.** Of four recalibration strategies tested (no adaptation,
-unsupervised feature alignment, a small per-session input layer, and full
-network fine-tuning), full fine-tuning wins at every elapsed time
-measured, with one exception (below). It recovers 35–48% of the
-accumulated PER gap within the first two months of drift (at 14–27
-minutes of new labeled speech) and 9–14% past 300 days, using the same
-budget. There is a minimum viable calibration budget, and it depends on
-how much drift there is to correct: at +9 days, 10 labeled sentences make
-the decoder *worse* than doing nothing at all (recovery fraction −8.8%).
-On the easiest session, with the least to gain, fine-tuning on too little
-data overfits to noise. At +597 days, about 15 minutes of labeled speech
-buys PER 0.718 instead of 0.796. Both are unusable decoders.
-**Recalibration slows the decline. It does not restore function.**
+**Decision.** Full fine-tuning wins at every elapsed time measured,
+recovering 31–48% of accumulated drift within two months at N=50–100 and
+9–14% past 300 days. It slows the decline; it does not restore day-zero
+function. A minimum viable budget exists below which recalibration
+actively hurts: at +9 days, ten labeled sentences leave the decoder
+worse than doing nothing (−8.8%).
+
+Two things limit how much is recoverable, and this design cannot say in
+what proportion.
+
+The signal itself degrades. Holding model, data quantity, corpus and
+evaluation protocol constant within a single decoder trained on all 45
+sessions, Switchboard error rises from 0.199 on early sessions to 0.356
+on late ones, a 78.8% relative increase.
+
+But recalibration is not near its limit either. At +597 days full
+fine-tuning reaches 0.718, well above the 0.356 a better-resourced
+decoder achieves on those same sessions. That gap is headroom, not a
+floor.
+
+What neither measurement gives is the ceiling this question actually
+needs: the best achievable from a frozen decoder plus N new-day
+sentences. Reaching 0.356 required 8,072 training trials spanning the
+whole recording, which no recalibration protocol can do. That bound is
+unmeasured, and the honest reading is that the shortfall is part signal
+and part method, in unknown proportion.
+
+The practical consequence is a change of question. Front-loading
+calibration at implant buys roughly three months of advantage rather
+than durable performance, so the useful question is not how much to
+collect once but how often, and how cheaply, to top up.
 
 ## What contradicted my predictions
 
@@ -181,6 +199,12 @@ results were tested, not assembled to fit a story.
   configuration runs 3.3x faster per trial (6.31 ms vs. 21.05 ms) at lower
   peak VRAM, so the compute budget for any future sweep is larger than this
   project assumed.
+- Measured headroom at the settled architecture is 3,411 MB of 8,192 MiB at
+  batch=64 in fp32, so training could have run at batch 64 throughout:
+  that halves the optimizer-step count for a given epoch budget. Model A
+  diverged at roughly 37,800 steps, where batch=64 would have given about
+  18,900 for the same epoch budget. Worth testing whether that changes the
+  outcome, not a claim that batch=64 would have prevented the divergence.
 - Every run here used a flat, hand-tuned learning rate with no scheduler or
   warmup; a step-based schedule would likely transfer across training-set
   sizes without retuning, and would plausibly have prevented both Model A's
