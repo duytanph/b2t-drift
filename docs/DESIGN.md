@@ -69,13 +69,11 @@ Summary above for the one-paragraph version).
 This project trains two distinct models. Conflating their numbers is a
 common, easy mistake: keep them separate in every results table.
 
-- **Model A: official-split pipeline check, EQUIVOCAL (2026-10-23).** Trained on the official split's `train` partition (all 45 sessions, all corpora,
-  8,072 trials); exists to confirm our data loading, GRU/CTC core, patching, and training loop produce a PER on the same scale as published results.
-  The shipping learning rate (0.001) diverges at this scale (~37,800 optimizer steps over 150 epochs vs. ~4,200 for Model B at s05); a day-layer-off
-  control reproduced the same divergence, ruling out the diagonal-for-full day-layer substitution as the cause. At 10x lower (0.0001), training is
-  stable for the full 150 epochs but reaches only val PER **0.2211**: equivocal against the pre-registered bands (pass <=0.20, fail >0.25), not a pass
-  (`docs/FINDINGS.md`: "Model A's divergence is a learning-rate transfer problem, not the pipeline; the result is equivocal"). **The failure mode is
-  an optimization instability, not a pipeline defect: localized to the 45-session/all-corpora regime, independent of day layers, outside every regime Model B exercises.** Not comparable to Model B. Post-hoc, not re-registered: Model B's own session-count trend, extrapolated to 45 sessions, predicts 0.219 (`docs/FINDINGS.md`, same entry), close to the measured 0.2211, suggesting the band, not the pipeline, may be mis-set.
+- **Model A: official-split pipeline check, EQUIVOCAL (2026-10-23).** Trained on the official split's `train` partition (45 sessions, all
+  corpora, 8,072 trials) to confirm the pipeline reproduces a published-scale PER. The shipping learning rate (0.001) diverges at this scale; at 10x
+  lower (0.0001) it trains stably but reaches only val PER **0.2211** against the pre-registered bands (pass <=0.20, fail >0.25): equivocal, not a
+  pass. The failure is an optimization instability specific to the 45-session/all-corpora regime, not a pipeline defect, and Model A is not comparable
+  to Model B (`docs/FINDINGS.md`: "Model A's divergence is a learning-rate transfer problem, not the pipeline; the result is equivocal").
 - **Model B: our-split drift model.** Trained on **our split** (section
   2): the temporal cut-point sweep. Its PER curve across held-out
   sessions is the project.
@@ -104,13 +102,14 @@ common, easy mistake: keep them separate in every results table.
 Candidate interventions for the DECISION question, increasing order of
 participant-time cost. Phase 3 split Arm 3 into 3a/3b below.
 
-| Arm | Labels needed | Targets | Notes |
-|---|---|---|---|
-| **0: no adaptation (baseline)** | None | n/a | Day-0 calibrated decoder, unmodified. Zero participant time. This is what the drift curve itself measures. |
-| **1: unsupervised distribution alignment** (CORAL, Procrustes) | None (unlabeled new-day data only) | Subspace rotation | Linear alignment fit from unlabeled new-day features alone. **REFUTED as a correction**: verdict below. |
-| **2: new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | Structurally identical to the `day_weights`/`day_biases` layers in the official checkpoint (`docs/FINDINGS.md`). lr=1e-5, measured separately from Arm 3b's (`docs/FINDINGS.md`: "A learning rate measured for one arm does not transfer to another"). **CLOSED: insufficient capacity**: verdict below. |
-| **3a: output projection layer only** | N labeled sentences | Whatever a 41-class linear readout can absorb | Intermediate cost between Arm 2 and full fine-tune. lr=1e-4, also measured separately. |
-| **3b: fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | Highest cost, lr=1e-3. **Wins at every elapsed time measured** bar one exception: verdict below. Catastrophic-forgetting risk at small N on lightly-drifted sessions. |
+| Arm | Labels needed | Targets | Params updated | Participant time | Learning rate | Step/epoch budget | Notes |
+|---|---|---|---:|---|---|---|---|
+| **0: no adaptation (baseline)** | None | n/a | 0 | 0 min; no new-day data used at all | n/a | n/a | Day-0 calibrated decoder, unmodified. This is what the drift curve itself measures. |
+| **1a: unsupervised alignment (CORAL)** | None (unlabeled new-day data only) | Subspace rotation | 0 (closed-form solve, no gradient descent) | 0 min transcription; requires unlabeled new-day recording to fit the alignment matrix | n/a | n/a (closed-form) | **REFUTED as a correction**: verdict below. |
+| **1b: unsupervised alignment (Procrustes)** | None (unlabeled new-day data only) | Subspace rotation | 0 (closed-form solve, no gradient descent) | 0 min transcription; requires unlabeled new-day recording to fit the alignment matrix | n/a | n/a (closed-form) | **REFUTED as a correction**: verdict below. |
+| **2: new day-specific input layer, rest of network frozen** | N labeled sentences | Tuning change + subspace rotation | 1,024 (512 scales + 512 biases) | ~14 min at N=50, ~27 min at N=100 | 1e-5, measured separately from Arm 3b's (`docs/FINDINGS.md`: "A learning rate measured for one arm does not transfer to another") | 400 steps, fixed across N | Structurally identical to the `day_weights`/`day_biases` layers in the official checkpoint (`docs/FINDINGS.md`). **CLOSED: insufficient capacity**: verdict below. |
+| **3a: output projection layer only** | N labeled sentences | Whatever a 41-class linear readout can absorb | 21,033 (512×41 + 41 bias) | ~14 min at N=50, ~27 min at N=100 | 1e-4, also measured separately | 200–400 steps (N=10–100) | Intermediate cost between Arm 2 and full fine-tune. |
+| **3b: fine-tune the whole network** | N labeled sentences | Everything the other arms target, plus any deeper change | 15,018,537 (~15.0M; all trainable weights, `GRUCTC.n_parameters()`) | ~14 min at N=50, ~27 min at N=100 | 1e-3 | 100–200 steps (N=10–100) | Highest cost. **Wins at every elapsed time measured** bar one exception: verdict below. Catastrophic-forgetting risk at small N on lightly-drifted sessions. |
 
 A fourth arm (recomputing per-session z-score statistics) is retired:
 the data already does this via a rolling per-channel z-score (`docs/DATASET.md` section 9 item 7).
@@ -367,9 +366,10 @@ optimizer's first step, or use a fresh optimizer for that phase.
   reduces but does not eliminate this confound** (trial-level r=0.137,
   p=1.3e-28). Report per-session median seq_len alongside PER on every
   drift curve (`figures/sentence_length_over_time.png`).
-- **SNR loss, tuning change, and subspace rotation are confirmed but
-  cannot be separated or ranked by this design** (section 6; |ρ| 0.70–0.90
-  inter-correlated).
+- **SNR loss, tuning change, and subspace rotation are confirmed but cannot be
+  separated or ranked by this design**: all three are near-monotone functions
+  of elapsed time; partialling out days-since-cut drops pairwise correlations
+  to |ρ| <= 0.32, none significant (n=27, section 6).
 - **Recovery-fraction's reference (section 5) is validation PER inside
   the training sessions, not a true day-zero session** (an optimistic
   ceiling, so reported fractions are lower bounds); its 5-split sd reflects
