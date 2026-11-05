@@ -210,15 +210,14 @@ selection rule"). **s15 is reported alongside as a robustness check**:
 the rule is silent on generalization/stability, both of which s05
 scores worst on (same entry's addendum, and "The cut-point sweep...").
 
-**Corpus stratification: Switchboard-only** is the primary analysis; all-corpora is a
-fallback, since pooling would conflate task-distribution shift with neural drift: the
-training block is ~87–88% Switchboard while at least 8 of 30 held-out sessions have zero
-Switchboard trials (`docs/FINDINGS.md`: "Corpus composition is a serious training/eval
-confound"); this is an 11.8% training-data cost at s15. The ≥50-trial viability
-threshold was fixed before any PER value existed. The official split cannot measure
-drift for the same reason (`docs/DATASET.md` sections 12–13): every session contributes
-training data, so it shows near-zero drift by construction; the pretrained checkpoint
-has no held-out future and is useful only for validating our evaluation code.
+**Corpus stratification: Switchboard-only** is the primary analysis; all-corpora is a fallback,
+since pooling would conflate task-distribution shift with neural drift: the training block is
+~87–88% Switchboard while at least 8 of 30 held-out sessions have zero Switchboard trials
+(`docs/FINDINGS.md`: "Corpus composition is a serious training/eval confound"); this is an 11.8%
+training-data cost at s15. The ≥50-trial viability threshold was fixed before any PER value
+existed. The official split cannot measure drift for the same reason (`docs/DATASET.md` sections
+12–13): every session contributes training data, so it shows near-zero drift by construction; the
+pretrained checkpoint has no held-out future and is useful only for validating our evaluation code.
 
 ---
 
@@ -243,10 +242,11 @@ has no held-out future and is useful only for validating our evaluation code.
   section 9 item 7). `data/normalize.py` must not implement its own.
 - **Shipped training runs use fp16 (`amp=True`) -- confirmed from `configs/experiment/switchboard_baseline.yaml`, not memory.**
   This project's settled architecture (3L/512H, patch 14/4), measured on a real training run: peak GPU memory **1,346 MB** at batch=32/fp16/real
-  lengths (`docs/FINDINGS.md`: "Late-period ceiling measured directly..."), comfortably under 8,192 MiB. fp32 figures below are a stated CONTRAST, not
-  what ships: seq_len=845 (real median), batch=32/fp32 is 5,029 MB/673.70 ms per step (61% of 8,192 MiB); batch=64/fp32 reports 9,527 MB but does NOT
-  fit -- WDDM silently spills to system RAM with no `OutOfMemoryError`, so watch step time (22.3x), not exceptions. fp16/batch=64 genuinely
-  fits (5,130 MB) (`docs/FINDINGS.md`: "At the real median length, batch=64 does not fit in 8 GB; it silently spills through WDDM").
+  lengths (`docs/FINDINGS.md`: "Late-period ceiling measured directly..."), comfortably under 8,192 MiB. Re-measured at the settled architecture in
+  fp32 (`tools/benchmark_gru.py`, seq_len=845): batch=32 is 1,761 MB, batch=64 is 3,411 MB -- NEITHER spills; the WDDM warning below is
+  about the benchmark's bigger "baseline" config (5L/1024H, the published paper's architecture, not this project's own), not what ships: fp32/batch=32
+  is 5,029 MB/673.70 ms; fp32/batch=64 reports 9,527 MB but does NOT fit -- WDDM silently spills with no `OutOfMemoryError`; fp16/batch=64
+  there genuinely fits (5,130 MB) (`docs/FINDINGS.md`: "At the real median length, batch=64 does not fit in 8 GB; it silently spills through WDDM").
 - **PER is independent of batch composition.** `GRUCTC.forward` zeros
   every padded timestep right after `DayLayers`, before smoothing;
   `input_lengths` is a mandatory forward argument (`docs/FINDINGS.md`:

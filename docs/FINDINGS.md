@@ -2624,6 +2624,8 @@ the correction, not just a confirmation.
 
 ### Late-period ceiling measured directly: the signal itself, not the recalibration method, limits the +597d result (2026-11-04)
 
+**PARTIALLY SUPERSEDED by "The ceiling was data-limited, not signal-limited; Arm 3b has real headroom" (2026-11-05).** Only this entry's "Consequence" paragraph's claim that 0.6901 is a ceiling Arm 3b's +597d result should be judged against, and the ~73% implied recovery fraction built on treating it as one, are affected. The measured point estimate (0.6901), its bootstrap CI, the pool composition, and the split/training method are NOT superseded -- they are a real, reproducible number, just not a ceiling on what the late-period signal supports. The first addendum below (the Model A data-scarcity check, MIDDLE case) and caveat (b) of the second addendum (architecture/data-quantity-specific, not an information-theoretic bound) already anticipated this; see the new entry for the resolution.
+
 **Question:** Recovery-fraction's reference (`docs/DESIGN.md` section 11)
 is s05's training-block validation PER (0.15765) -- an optimistic
 ceiling, since it is measured with no elapsed time at all between
@@ -2778,3 +2780,77 @@ patch 14/4, diagonal day layers) at THIS data quantity (752 training
 trials), not an information-theoretic bound on what the late-period
 signal contains -- a larger model or more late-period data might do
 better.
+
+---
+
+### The ceiling was data-limited, not signal-limited; Arm 3b has real headroom (2026-11-05)
+
+**Question:** The previous entry's data-scarcity check (Model A's
+late-pool Switchboard cell, PER=0.3564) landed in the pre-registered
+MIDDLE band and was left unresolved. Two questions remained open: does
+more training data genuinely rescue late-session Switchboard decoding,
+and separately, was the 836-trial ceiling run's 0.6901 actually a
+ceiling on the late-period signal, or an artifact of its own small
+training set?
+
+**Method:** Re-scored Model A's checkpoint once more for the matched
+comparison the previous entry's cells (b)/(c) were missing: EARLY
+sessions, Switchboard trials only -- same checkpoint, same
+within-session train/val protocol, same corpus filter as the late cell,
+differing only in recording period. Bootstrap CI computed identically
+to every other cell (`scratch/modelA_breakdown.py`).
+
+**Result: Model A's early-session Switchboard PER is 0.1993, 95% CI
+[0.1900, 0.2086] (n=864).** Matched comparison, model/data
+quantity/corpus/protocol all held constant, period the only variable:
+early 0.1993 (n=864) vs. late 0.3564 (n=173, previous entry's cell (c))
+-- absolute difference **+0.1571**, relative increase **+78.8%**. This
+is clean, single-model evidence that late-period signal genuinely
+degrades relative to early sessions.
+
+That is a different question from whether 0.6901 is a ceiling, though.
+Comparing Model A's late-Switchboard cell (0.3564, 8,072 training
+trials across all 45 sessions) against the dedicated ceiling run
+(0.6901, 752 training trials from only the six late sessions): same
+late sessions, same corpus, 10.7x the training data, and PER falls by
+nearly half.
+
+**Consequence, five points:**
+
+**(a) The 836-trial ceiling run was substantially DATA-LIMITED.** Model
+A reaches 0.3564 on the same late Switchboard material with 8,072
+training trials, against the ceiling run's 0.6901 with 752. 0.6901 is
+therefore NOT a ceiling on what the late signal supports -- it is a
+small-data artifact of that specific run.
+
+**(b) Arm 3b's +597d result of 0.718 is NOT near-optimal.** It sits
+well above 0.3564 (the best late-Switchboard PER actually demonstrated,
+by any model, on this data), so meaningful headroom exists and the
+limiting factor is not the signal alone.
+
+**(c) Methodology note: the pre-registered bands were poorly designed.**
+They anchored on whether the Model A cell was high or low in absolute
+terms (>=0.55 vs. <=0.35), when the informative comparison was always
+that cell against 0.6901 directly -- a relative test, not an absolute
+one. An absolute band cannot distinguish "the late signal is this bad"
+from "this checkpoint under-extracts the late signal," which is exactly
+the ambiguity that produced the inconclusive MIDDLE case. Recorded here
+as a mis-set-band note, the same way `docs/DESIGN.md` section 3 keeps
+Model A's own mis-set equivocal band on record rather than erasing it.
+
+**(d) What this experiment DID establish:** signal degradation measured
+within a single model on matched material -- Model A's own Switchboard
+PER rises from 0.1993 (early) to 0.3564 (late), +78.8% relative, with
+data quantity, corpus, model, and evaluation protocol all held
+constant. This is real and not superseded by (a)/(b) above.
+
+**(e) What remains UNMEASURED: the ceiling that matters for Question
+3** -- the best achievable PER from a FROZEN decoder plus N new-day
+labeled sentences, which is what every recalibration arm actually has
+available. Model A's 0.3564 required training on the late sessions
+with 8,072 trials, which no recalibration protocol can do (Arm 3b's
+richest cell uses N=100, a few dozen minutes of speech). Neither 0.6901
+(the data-limited 752-trial ceiling) nor 0.3564 (Model A's
+8,072-trial, all-session result) should be substituted for this
+unmeasured number; both are off this experiment's achievable axis in
+opposite directions.
