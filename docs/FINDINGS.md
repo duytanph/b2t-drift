@@ -2619,3 +2619,92 @@ both corrected to this weaker, now partial-correlation-informed reading;
 neither previously stated only "cannot be ranked" (both asserted the
 shared-cause reading as the signature the data showed), so both needed
 the correction, not just a confirmation.
+
+---
+
+### Late-period ceiling measured directly: the signal itself, not the recalibration method, limits the +597d result (2026-11-04)
+
+**Question:** Recovery-fraction's reference (`docs/DESIGN.md` section 11)
+is s05's training-block validation PER (0.15765) -- an optimistic
+ceiling, since it is measured with no elapsed time at all between
+calibration and evaluation. How well can ANY decoder do on a LATE
+session's signal, with drift removed from the problem entirely, by
+training and evaluating on the same late sessions? This is the real
+upper bound Arm 3b's late-session results should be judged against.
+
+**Pool.** The six Switchboard sessions past +500d from the s05 cut,
+their labeled (train+val partition) Switchboard trials only:
+
+| Session | Day offset | Labeled Switchboard trials |
+|---|---:|---:|
+| `t15.2025.01.10` | +504 | 129 |
+| `t15.2025.01.12` | +506 | 210 |
+| `t15.2025.03.14` | +567 | 83 |
+| `t15.2025.03.16` | +569 | 125 |
+| `t15.2025.03.30` | +583 | 195 |
+| `t15.2025.04.13` | +597 | 94 |
+
+836 trials pooled, 92% of s05's 908-trial training block -- a fair-size
+comparison, no window-widening needed.
+
+**Method.** Per-session 90/10 split (`val_fraction=0.1`, seed 0, same
+convention as `build_temporal_split`), then the recalibration grid's
+stricter rule on top: any val trial whose sentence text also appears
+anywhere in train is dropped (`b2t_drift.evaluation.calibration.
+normalize_sentence`) -- 83 val trials pre-dedup, 31 dropped to sentence
+overlap, 52 remaining. 753 train trials. Train and val both come from
+the same six late sessions, so there is no elapsed-time gap between
+them: this isolates signal quality from drift by construction. Manifest:
+`splits/late_period_ceiling_switchboard.json` (`kind: "official"`, built
+by `scratch/build_late_period_ceiling_split.py`). Architecture
+config-identical to s05's run (`configs/experiment/
+switchboard_baseline.yaml`: 3 layers, hidden 512, patch 14/4, diagonal
+day layers, λ=300, lr=1e-3, batch 32, amp on, max_epochs/patience 150,
+seed 0) -- the only difference from s05's run is which six sessions are
+in the training block. Trained via `scripts/02_train.py`, evaluated via
+`scratch/evaluate_late_period_ceiling.py` (bootstrap CI on the pooled
+post-dedup val set, `bootstrap_error_rate_ci`, 10,000 resamples, seed 0).
+
+**PRE-REGISTERED, fixed before training:** late-period val PER <= 0.208
+(within 0.05 of s05's 0.158) means the signal is largely intact and
+recalibration METHODS are the bottleneck; PER > 0.30 means the signal
+itself has degraded and Arm 3b should be judged against this ceiling
+rather than against 0.158; 0.208–0.30 is partial. Bands evaluated
+against the bootstrap CI, not the point estimate alone; a CI straddling
+either boundary is INCONCLUSIVE at this sample size, not assignable to a
+band.
+
+**Result: late-period val PER = 0.6901, 95% CI [0.6757, 0.7040] (n=52,
+10,000 resamples) -- SIGNAL DEGRADED, not inconclusive.** The CI sits
+entirely above 0.30, with no overlap with either boundary. Best epoch
+31 of 150 (full budget ran; patience=150 never triggers early stopping
+by construction). No divergence: train loss fell from 7.305 to 0.632
+over 150 epochs with the longest consecutive rising streak being 2
+epochs (ordinary noise, not the Model A signature of a sustained,
+many-epoch rise) -- the run was allowed to finish in full per the
+pre-registered protocol regardless. Wall-clock 680.1s (~11.3 min),
+well under the ~39 min fp32-benchmark-based estimate because this run
+used `amp=True` (fp16, the shipped default) and the fp32 benchmark the
+estimate was built from did not account for that. Peak GPU memory
+1,346.4 MB (`torch.cuda.max_memory_allocated`), also far under the
+~5,029 MB fp32 estimate for the same reason. Max GPU temperature during
+the run: 69°C (idle baseline ~45°C).
+
+**Consequence: the signal itself, not the recalibration method, is the
+binding constraint at late sessions -- Arm 3b's +597d result should be
+read against this ceiling, not against 0.158.** At `t15.2025.04.13`
+(+597d, N=50): arm0_per=0.7960, arm3b_per=0.7182
+(`results/recalibration_recovery_fraction.csv`). Against the old
+denominator (reference_per=0.15765): drift_gap=0.6383,
+recovery_fraction=12.2%. Against the new, measured ceiling (0.6901):
+drift_gap=0.1059, recovered (unchanged, =arm0_per−arm3b_per)=0.0777,
+implied recovery_fraction≈73.4% -- a 6x difference driven entirely by
+which denominator is used. Arm 3b's point estimate (0.7182) sits only
+0.014 above the ceiling's CI upper bound (0.7040), i.e. close to the
+measured ceiling, not meaningfully below it: full fine-tuning is nearly
+exhausting what this late session's degraded signal supports. This is a
+measured implication, not a restatement -- the published recovery
+fractions in `results/recalibration_recovery_fraction.csv`, README, and
+`docs/DESIGN.md` section 5 are NOT recomputed against this new ceiling
+in this entry; whether to restate them against it is a separate
+decision.

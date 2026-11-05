@@ -235,20 +235,18 @@ and is useful only for validating our evaluation code.
   as shipped; `tools/measure_padding_waste.py`). Only batch ORDER is shuffled
   per epoch. **Cost, accepted deliberately:** batches are non-i.i.d. in
   sentence length, standard practice in speech recognition, not a bug.
-- **DataLoader: `num_workers=2`, `persistent_workers=True`, `pin_memory=True`.** Settled by a real measurement on SSD storage; wait is
-  under 2% of epoch time at `num_workers >= 1`, GPU compute dominates. **Benchmarking rule, violated twice:** a synthetic benchmark
-  must reproduce the real access pattern AND the real data dimensions, and any parameter standing in for a measured property must cite
-  its source, so correcting the property corrects the benchmark: violated here (page-cache hits, not real SSD reads) and by the GPU
-  benchmark below (`seq_len=527`, an uncited copy of one session's statistic) (`docs/FINDINGS.md`: "Storage medium, not DataLoader
+- **DataLoader: `num_workers=2`, `persistent_workers=True`, `pin_memory=True`.** Settled by a real SSD measurement:
+  wait is under 2% of epoch time at `num_workers >= 1`, GPU compute dominates. **Benchmarking rule, violated twice:** a synthetic
+  benchmark must match the real access pattern, real data dimensions, and cite its source for any measured parameter -- violated here (page-cache
+  hits, not real SSD reads) and by the GPU benchmark below (uncited `seq_len=527`) (`docs/FINDINGS.md`: "Storage medium, not DataLoader
   configuration, was the training bottleneck").
 - **Normalization is already applied upstream**: a rolling per-channel,
   per-sentence window, NOT per-block/session/global (`docs/DATASET.md`
   section 9 item 7). `data/normalize.py` must not implement its own.
 - **GPU headroom at the real sequence length is 61%, not 42%; batch=64 does not fit in fp32.** `seq_len=845` (real median):
-  batch=32/fp32 is 5,029 MB/673.70 ms per step (61% of 8,192 MiB); batch=64/fp32 reports 9,527 MB but does NOT fit, since WDDM silently
-  spills to system RAM with no `OutOfMemoryError` raised; watch step time (22.3x, not ~1.8x elsewhere), not exceptions. fp16/batch=64
-  genuinely fits (5,130 MB). Same mechanism as the N=100 recalibration-grid slowdown (26x, `loop.py`), predictable from a benchmark at
-  the real length (`docs/FINDINGS.md`: "At the real median length, batch=64 does not fit in 8 GB; it silently spills through WDDM").
+  batch=32/fp32 is 5,029 MB/673.70 ms per step (61% of 8,192 MiB); batch=64/fp32 reports 9,527 MB but does NOT fit -- WDDM silently spills
+  to system RAM with no `OutOfMemoryError`, so watch step time (22.3x), not exceptions. fp16/batch=64 genuinely fits (5,130 MB)
+  (`docs/FINDINGS.md`: "At the real median length, batch=64 does not fit in 8 GB; it silently spills through WDDM").
 - **PER is independent of batch composition.** `GRUCTC.forward` zeros
   every padded timestep right after `DayLayers`, before smoothing;
   `input_lengths` is a mandatory forward argument (`docs/FINDINGS.md`:
@@ -370,11 +368,13 @@ optimizer's first step, or use a fresh optimizer for that phase.
   separated or ranked by this design**: all three are near-monotone functions
   of elapsed time; partialling out days-since-cut drops pairwise correlations
   to |ρ| <= 0.32, none significant (n=27, section 6).
-- **Recovery-fraction's reference (section 5) is validation PER inside
-  the training sessions, not a true day-zero session** (an optimistic
-  ceiling, so reported fractions are lower bounds); its 5-split sd reflects
-  calibration-subset variability only, and calibration/evaluation trials
-  are interleaved within a session, not temporally ordered.
+- **Recovery-fraction's reference (section 5) is validation PER inside the training
+  sessions, an optimistic ceiling**: now measured directly against a real late-period
+  ceiling, PER=0.6901, 95% CI [0.6757, 0.7040] (n=52, `docs/FINDINGS.md`: "Late-period
+  ceiling measured directly...") -- signal, not method, binds at late sessions;
+  published recovery fractions are not recomputed against it here. 5-split sd reflects
+  calibration-subset variability only; calibration/evaluation trials are interleaved
+  within a session, not temporally ordered.
 
 ---
 
