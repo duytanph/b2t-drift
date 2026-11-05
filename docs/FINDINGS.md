@@ -2708,3 +2708,73 @@ fractions in `results/recalibration_recovery_fraction.csv`, README, and
 `docs/DESIGN.md` section 5 are NOT recomputed against this new ceiling
 in this entry; whether to restate them against it is a separate
 decision.
+
+**Addendum (2026-11-04): ruling out data scarcity as the explanation,
+via Model A's checkpoint.** The ceiling trained on 752 trials; a live
+alternative explanation is that a noisier signal just needs more data,
+so 0.6901 could reflect data scarcity rather than genuine late-period
+signal degradation. Model A (`runs/modelA_run3_lr1e4_full/
+checkpoint_best.pt`, `docs/DESIGN.md` section 3, val PER 0.2211) trains
+on each session's own train partition and scores on that session's own
+val partition -- the SAME within-session arrangement the ceiling run
+used, at 8,072 trials across all 45 sessions and all 6 corpora (9.6x the
+ceiling's 836). No training was needed: just re-scoring its existing
+checkpoint on `splits/official.json`'s val partition, broken down
+(`scratch/modelA_breakdown.py`). Overall val PER reproduced exactly
+(0.2211, n=1,426), confirming the methodology. By corpus: Freq words
+0.1682 (n=225), Harvard 0.2433 (n=45, small-N), Openwebtext 0.2267
+(n=80), Random 0.3253 (n=39, small-N), Switchboard 0.2270 (n=1,037);
+50-Word has no official-split val trials. Early sessions (all corpora):
+0.2023 (n=1,253). The six late-pool sessions (all corpora, which turned
+out to be 100% Switchboard in the official val partition): **0.3564,
+bootstrap 95% CI [0.3347, 0.3788] (n=173)** -- the cell that matters,
+not small-N. **This is the MIDDLE case, not either boundary**: the
+pre-registered bands were >=0.55 (data scarcity ruled out, ceiling
+corroborated) or <=0.35 (ceiling was data-limited); 0.3564 sits just
+above 0.35, and its own CI lower bound (0.3347) sits just below it. With
+9.6x the data, Model A still cannot reach late-session Switchboard PER
+anywhere near its own 0.2211 average or near early sessions' 0.2023 --
+more data clearly helps (0.3564 is well below the ceiling's 0.6901) but
+does not fully rescue late-session performance, and the result is too
+close to the low-case boundary to call cleanly. Per the pre-registered
+protocol: both readings are reported, item 4 (README) is skipped, and
+this round stops here on the data-scarcity question -- it is not
+resolved in either direction. Note: Model A is itself equivocal against
+its own pre-registered band (`docs/DESIGN.md` section 3), so it is a
+conservative probe for this purpose, not a clean one.
+
+**Addendum (2026-11-04): what the bootstrap CI resamples.** The ceiling
+CI ([0.6757, 0.7040], width 0.028 at n=52) resamples whole TRIALS, not
+tokens or phonemes: `bootstrap_error_rate_ci` (`evaluation/metrics.py`)
+draws `n` trials with replacement per resample and recomputes
+`aggregate_error_rate` -- pooled edit distance over pooled reference
+length, a ratio estimator, not a mean of per-trial PERs -- on each
+resample (confirmed by reading the function and its docstring, not
+assumed). This is the same function `results/drift_curve.csv`'s
+per-session CIs use. A ratio-of-sums estimator legitimately has lower
+variance than a mean-of-per-trial-PERs one, so the CI's width is not by
+itself evidence of an error. No recomputation needed, and the finding is
+unaffected either way: the conclusion only required the CI to clear
+0.30, and it does by a wide margin regardless of which of the two
+reasonable resampling conventions is used.
+
+**Addendum (2026-11-04): two caveats.** (a) The late pool spans 93 days
+(+504 to +597); s05's training block spans about two weeks. The pooled
+model fits data that is itself internally drifting, which inflates its
+validation PER for reasons unrelated to signal quality at any single
+day -- **0.6901 is a CONSERVATIVE ceiling**: a true single-day ceiling
+would likely be lower (better), and Arm 3b's margin wider than the
+measured 0.0281 (0.7182 − 0.6901). Magnitude, estimated (not measured
+directly on the ceiling model -- its 52 val trials split six ways are
+too thin for a reliable per-session slope): s15's measured late-segment
+(>150d) plateau slope is **+0.021 PER/100d** (this entry's own
+pre-existing text above); over a 93-day span that predicts roughly
+**+0.02 PER** of within-pool drift inflation, the same order of
+magnitude as Arm 3b's margin itself. This is a proxy from a different
+model's plateau, not a direct measurement of the ceiling run -- stated
+as a direction and an order-of-magnitude, not a precise correction. (b)
+0.6901 is the ceiling for THIS architecture (3 layers, hidden 512,
+patch 14/4, diagonal day layers) at THIS data quantity (752 training
+trials), not an information-theoretic bound on what the late-period
+signal contains -- a larger model or more late-period data might do
+better.
