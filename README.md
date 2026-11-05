@@ -195,16 +195,13 @@ results were tested, not assembled to fit a story.
 - Test whether a rank-constrained day layer sits usefully between the
   diagonal parameterization's insufficiency and the full parameterization's
   training instability.
-- Training was left at fp32/batch=32 throughout; a measured fp16/batch=64
-  configuration runs 3.3x faster per trial (6.31 ms vs. 21.05 ms) at lower
-  peak VRAM, so the compute budget for any future sweep is larger than this
-  project assumed.
 - Measured headroom at the settled architecture is 3,411 MB of 8,192 MiB at
-  batch=64 in fp32, so training could have run at batch 64 throughout:
-  that halves the optimizer-step count for a given epoch budget. Model A
-  diverged at roughly 37,800 steps, where batch=64 would have given about
-  18,900 for the same epoch budget. Worth testing whether that changes the
-  outcome, not a claim that batch=64 would have prevented the divergence.
+  batch=64 in fp32 (less in fp16, the shipped default), so training could
+  have run at batch 64 throughout: that halves the optimizer-step count
+  for a given epoch budget. Model A diverged at roughly 37,800 steps,
+  where batch=64 would have given about 18,900 for the same epoch budget.
+  Worth testing whether that changes the outcome, not a claim that
+  batch=64 would have prevented the divergence.
 - Every run here used a flat, hand-tuned learning rate with no scheduler or
   warmup; a step-based schedule would likely transfer across training-set
   sizes without retuning, and would plausibly have prevented both Model A's
