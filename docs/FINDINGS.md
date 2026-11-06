@@ -1807,6 +1807,8 @@ own finding, below.
 
 ### Recalibration slows the decline but does not restore function (2026-09-28)
 
+**PARTIALLY SUPERSEDED by "Recovery fraction's 'two sharp steps' withdrawn: three measured levels, two transitions of unresolved sharpness" (2026-11-05).** Only the characterization of the decline as happening "in two sharp steps" is withdrawn. The recovery-fraction values themselves, the -15.5 (N=25) / -23.1 (N=50) point difference between the +58d and +184d readings, and every other number in this entry are NOT superseded.
+
 **Question:** How much of the accumulated drift does the best arm (3b)
 actually recover, relative to what the decoder could achieve with no
 drift at all, and does that recovered share change with elapsed time?
@@ -2079,6 +2081,8 @@ independence is required.
 ---
 
 ### Task 1's gap-fill: two intermediate sessions turn a descriptive slope into a significant one (2026-09-28)
+
+**PARTIALLY SUPERSEDED by "Recovery fraction's 'two sharp steps' withdrawn: three measured levels, two transitions of unresolved sharpness" (2026-11-05).** This entry's "roughly HALFWAY between" reasoning, used here as evidence FOR a discrete step, in fact argues the opposite: landing between two endpoints is what a linear decline predicts. The measured recovery-fraction values (19.5%/19.9% at N=50, 12.8%/12.8% at N=25) and the significance results for the N=25/N=50 slopes are NOT superseded.
 
 **Question:** The recovery-fraction curve had no measured session between
 +58d and +329d (a 271-day window chosen by session selection, not a data
@@ -2856,3 +2860,86 @@ richest cell uses N=100, a few dozen minutes of speech). Neither 0.6901
 8,072-trial, all-session result) should be substituted for this
 unmeasured number; both are off this experiment's achievable axis in
 opposite directions.
+
+---
+
+### Recovery fraction's "two sharp steps" withdrawn: three measured levels, two transitions of unresolved sharpness (2026-11-05)
+
+**Question:** `docs/DESIGN.md` section 5 and two entries above ("Recalibration
+slows the decline but does not restore function", 2026-09-28; "Task 1's
+gap-fill...", 2026-09-28) describe the N=25/N=50 recovery-fraction curve as
+declining in "two sharp steps" rather than smoothly. Does the data support
+an abrupt transition, or only three measured levels with two untested gaps
+between them?
+
+**What is actually measured**, re-verified directly against
+`results/recalibration_grid.csv` via `scratch/recovery_analysis.py` (the
+module `scratch/recovery_figure.py` itself imports, so this is the same
+data the figure reads, not a re-derivation):
+
+| Elapsed time | N=50 recovery fraction |
+|---|---|
+| +9d | 31.2% |
+| +42d | 35.3% |
+| +58d | 42.6% (29 eval trials, flagged unreliable, previous entries) |
+| +184d | 19.5% |
+| +259d | 19.9% |
+| +329d | 9.3% |
+| +597d | 12.2% |
+
+Three groups, not two points joined by two drops: an early group of three
+rising points (+9/+42/+58), a middle group of two nearly-equal points 75
+days apart (+184/+259), and a late group of two points (+329/+597). No
+session was ever evaluated in the 126 days between +58d and +184d, or the
+70 days between +259d and +329d.
+
+**Method:** To test whether the two transitions look like discrete steps or
+are simply unmeasured, fit a straight line between the two endpoints
+bracketing each gap and compare its prediction at +184d/+259d against what
+the gap-fill sessions actually measured.
+
+**Result, part 1 -- the step claim is unsupported.** A straight line from
+the +58d value (42.6%) to the +329d value (9.3%) predicts **27.1% at +184d
+and 17.9% at +259d**. The measured values are **19.5% and 19.9%** -- 7.6
+points below the line at +184d and 2.0 points above it at +259d (N=25 shows
+the same pattern: predicted 18.0%/11.8% vs. measured 12.8%/12.8%). The
+gap-fill entry above read "roughly HALFWAY between" the outer levels as
+evidence FOR a discrete step. **That is backwards: landing between the two
+endpoints is exactly what a smooth, linear decline predicts across an
+unmeasured interval -- it is not distinguishing evidence either way.** With
+only two points inside what was a 271-day gap, the shape of either
+transition cannot be recovered: a sharp drop and a gradual one through the
+same window produce the same two endpoint readings.
+
+**Result, part 2 -- what the data does support.** +184d and +259d are
+nearly equal to EACH OTHER (19.5% vs. 19.9%, N=50; 12.8% vs. 12.8%, N=25)
+despite being 75 days apart. Continuing the same linear decline used above
+predicts a drop of **9.2 points (N=50) / 6.2 points (N=25)** between them;
+the observed change is **+0.4 / 0.0 points**. That IS real evidence for a
+distinct, comparatively flat middle level sitting between the early and
+late groups -- just not evidence about how sharply either boundary
+transition happens. Right conclusion (three levels, not one smooth
+single-rate decline), wrong argument (the earlier entry's "halfway"
+reasoning, which actually argues the opposite of what it was read as
+showing).
+
+**Consequence:** "Two sharp steps" is withdrawn. What replaces it: recovery
+fraction sits at three measured levels -- roughly 31-42% through +58d,
+~19.5-19.9% at +184d-+259d, ~9.3-12.2% from +329d on -- and the two
+transitions between them, spanning 126 and 70 unmeasured days respectively,
+could be abrupt or gradual; this design cannot tell which. The -15.5-point
+(N=25) / -23.1-point (N=50) difference between the +58d and +184d readings,
+reported in "Recalibration slows the decline but does not restore
+function" above, is unaffected: it is the gap between two measured values
+and stands regardless of the shape in between. Only the word "step"
+attached to it, and the "roughly halfway" argument in the gap-fill entry,
+are withdrawn.
+
+`README.md`'s own "What I'd do next" section already asked, before this
+retraction, whether the drop was "itself sudden or just under-resolved" --
+the repo contained this contradiction before today: one passage asserted a
+shape, another already flagged that the sampling couldn't establish it.
+That bullet is reworded to drop "steps down sharply" while keeping its
+point. `docs/DESIGN.md` sections 5 and 11 are updated accordingly;
+`figures/recalibration_recovery_fraction.png` is retitled, and its shaded
+bands now mark the two unmeasured intervals instead of the apparent drops.

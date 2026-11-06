@@ -188,9 +188,9 @@ results were tested, not assembled to fit a story.
 - Split calibration and evaluation trials sequentially within a session
   (calibrate on the first N, evaluate on what follows) rather than
   randomly, to match a real deployment.
-- Add sessions in the two elapsed-time windows where recovery fraction
-  steps down sharply (currently unsampled) to see whether the drop is
-  itself sudden or just under-resolved.
+- Add sessions in the two elapsed-time windows with no evaluated session
+  (+58d-+184d, +259d-+329d) to find out whether recovery fraction changes
+  abruptly there or just gradually, which the current sampling can't tell.
 - Closed-loop evaluation: this dataset is offline-only and cannot
   measure how a user adapts to a degrading or freshly-recalibrated
   decoder.

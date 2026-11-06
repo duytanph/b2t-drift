@@ -128,9 +128,9 @@ identity-day-layer redirect control, repeated under diagonal day layers").
 | 2: day layer, backbone frozen | **CLOSED**: at a safe lr the layer barely leaves identity (max\|scale−1\|≈0.004); 1,024 params is enough to be stable under joint training, not enough to correct one new day | "A diagonal day layer lacks the capacity to correct accumulated drift" |
 | 3b: full fine-tune | **WINS** at every elapsed time measured except +9d at N=10 (worse than nothing there: a minimum viable budget exists below which recalibration is counterproductive) | "Full fine-tuning is the best use of a fixed participant-time budget...", "There is a minimum viable calibration budget..." |
 
-**Answer to Question 3:** spend the budget on full fine-tuning. It slows
-the PER decline but does not restore day-0 function, recovery-fraction
-falls in two sharp steps rather than smoothly, and a minimum viable
+**Answer to Question 3:** spend the budget on full fine-tuning. It slows the
+PER decline but does not restore day-0 function, recovery-fraction declines
+from roughly 36% early to roughly 11% beyond +329d, and a minimum viable
 budget exists below which recalibration hurts (`docs/FINDINGS.md`:
 "Recalibration slows the decline but does not restore function").
 
@@ -334,36 +334,31 @@ optimizer's first step, or use a fresh optimizer for that phase.
 
 ## 11. Stated limitations
 
-- **Single participant.** Everything here is one person's brain; nothing
-  generalizes across subjects.
-- **All results offline.** Closed-loop performance differs: the
-  participant adapts to the decoder's behavior in real use, uncaptured
-  here.
-- **Speaking strategy is unrecoverable.** Some blocks are vocalized, some
-  silent speech; the split isn't released, so it can't be controlled for.
-- **Test partitions are unlabeled.** 1,450 trials (13%) are unusable for
-  supervised work.
-- **Normalization is sentence-indexed, not time-indexed.** Sessions at
-  the same day-offset don't necessarily have the same number of
-  normalization-window updates (median ~42 trials/block); check whether
-  per-session PER correlates with session trial count before attributing
-  an effect to elapsed time.
-- **The first ~20 sentences of each session are normalized on a
-  still-filling window** and are noisier as a result (expected to be a
-  normalization artifact, not drift: section 12's warm-up-trials
-  decision).
-- **ALS progression may change what the participant can attempt to
-  articulate, independent of electrode health**: indistinguishable from
-  electrode degradation in this dataset. State it alongside any
-  drift-curve result.
+- **Single participant.** Everything here is one person's brain; nothing generalizes
+  across subjects.
+- **All results offline.** Closed-loop performance differs: the participant adapts to
+  the decoder's behavior in real use, uncaptured here.
+- **Speaking strategy is unrecoverable.** Some blocks are vocalized, some silent speech;
+  the split isn't released, so it can't be controlled for.
+- **Test partitions are unlabeled.** 1,450 trials (13%) are unusable for supervised work.
+- **Normalization is sentence-indexed, not time-indexed.** Sessions at the same day-
+  offset don't necessarily have the same number of normalization-window updates (median
+  ~42 trials/block); check whether per-session PER correlates with session trial count
+  before attributing an effect to elapsed time.
+- **The first ~20 sentences of each session are normalized on a still-filling window**
+  and are noisier as a result (expected to be a normalization artifact, not drift:
+  section 12's warm-up-trials decision).
+- **ALS progression may change what the participant can attempt to articulate,
+  independent of electrode health**: indistinguishable from electrode degradation in
+  this dataset. State it alongside any drift-curve result.
 - **Best-epoch selection carries roughly ±0.01 PER of noise**
-  (`docs/FINDINGS.md`: "Pre-committed cut-point selection rule"
-  addendum). **Differences below about 0.02 between cut points should
-  not be treated as meaningful.**
-- **Sentence length correlates with session date; Switchboard-only
-  reduces but does not eliminate this confound** (trial-level r=0.137,
-  p=1.3e-28). Report per-session median seq_len alongside PER on every
-  drift curve (`figures/sentence_length_over_time.png`).
+  (`docs/FINDINGS.md`: "Pre-committed cut-point selection rule" addendum).
+  **Differences below about 0.02 between cut points should not be treated as
+  meaningful.**
+- **Sentence length correlates with session date; Switchboard-only reduces but does not
+  eliminate this confound** (trial-level r=0.137, p=1.3e-28). Report per-session median
+  seq_len alongside PER on every drift curve
+  (`figures/sentence_length_over_time.png`).
 - **SNR loss, tuning change, and subspace rotation are confirmed but cannot be
   separated or ranked by this design**: all three are near-monotone functions
   of elapsed time; partialling out days-since-cut drops pairwise correlations
@@ -375,6 +370,11 @@ optimizer's first step, or use a fresh optimizer for that phase.
   published recovery fractions are not recomputed against it here. 5-split sd reflects
   calibration-subset variability only; calibration/evaluation trials are interleaved
   within a session, not temporally ordered.
+- **The two largest recovery-fraction drops straddle unmeasured intervals of 126 and 70
+  days (+58d to +184d, +259d to +329d).** The data cannot distinguish an abrupt transition
+  from a gradual one across either gap; closing this requires sessions evaluated inside
+  those windows (`docs/FINDINGS.md`: "'Two sharp steps' withdrawn: three measured levels,
+  two transitions of unresolved sharpness").
 
 ---
 
