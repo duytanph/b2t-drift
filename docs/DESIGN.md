@@ -130,7 +130,7 @@ identity-day-layer redirect control, repeated under diagonal day layers").
 
 **Answer to Question 3:** spend the budget on full fine-tuning. It slows the
 PER decline but does not restore day-0 function, recovery-fraction declines
-from roughly 36% early to roughly 11% beyond +329d, and a minimum viable
+from roughly 33% early to roughly 11% beyond +329d, and a minimum viable
 budget exists below which recalibration hurts (`docs/FINDINGS.md`:
 "Recalibration slows the decline but does not restore function").
 

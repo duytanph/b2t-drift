@@ -2614,12 +2614,15 @@ association" reading. None of the three partial 95% CIs excludes zero.
 
 **Consequence: this is a BRANCH B result, not Branch A.** The raw
 |ρ|=0.70-0.90 range is real and reproducible, but it is exactly what
-three measured changes that are each strongly monotone in elapsed time would
-produce whether or not they share a cause — it establishes that the
-three measured changes are collinear and cannot be ranked against each other,
-which is the claim this design can actually support; it is weak evidence
-for "one shared physical cause," which the raw number alone cannot
-distinguish from three concurrent, independently-time-trending processes.
+three measured changes that each move monotonically with elapsed time would
+produce whether or not they share a cause. Controlling for days-since-cut
+removes almost all of it (partial |ρ| <= 0.322, none significant, n=27) --
+the opposite of what three mutually redundant metrics would show. What this
+establishes is confounding, not redundancy: each metric's individual
+contribution cannot be separated from the others because all three are
+confounded with elapsed time, which is the claim this design can actually
+support; it is weak evidence for "one shared physical cause," which the raw
+number alone cannot distinguish from three concurrent, independently-time-trending processes.
 `README.md`'s Attribution paragraph and `docs/DESIGN.md` section 6 are
 both corrected to this weaker, now partial-correlation-informed reading;
 neither previously stated only "cannot be ranked" (both asserted the
@@ -2943,3 +2946,35 @@ That bullet is reworded to drop "steps down sharply" while keeping its
 point. `docs/DESIGN.md` sections 5 and 11 are updated accordingly;
 `figures/recalibration_recovery_fraction.png` is retitled, and its shaded
 bands now mark the two unmeasured intervals instead of the apparent drops.
+
+**Addendum: the +58d anchor is itself the flagged cell (2026-11-05).** The
++58d/N=50 cell (42.6%) that Result part 1's interpolation check anchors to,
+and that the Consequence paragraph's "31-42%" upper bound draws from, is the
+one cell this project's own convention already flags as too small to trust:
+29 evaluation trials after de-duplication, below the figure's own <30-trial
+hollow-marker rule. This is a property of (session, N) jointly, not of the
+session alone -- N trials are carved out of the session's pool for
+calibration, so eval-trial count falls as N rises. Checked across all seven
+elapsed times and all four N: every other cell is comfortably above 30 (the
+smallest of the rest is +597d/N=50 at 44); +58d/N=50 is the only cell in the
+whole grid below the threshold (+58d/N=10: 70; +58d/N=25: 54; +58d/N=100 was
+never run). Excluding it, the early group's two unflagged N=50 cells (+9d
+31.2%, +42d 35.3%) give a range of **31-35%**, not 31-42%; `docs/DESIGN.md`
+section 5's "roughly 36% early" becomes **roughly 33%** on the same basis.
+The figure's title, its +58d marker, and section 5 are corrected to the
+unflagged range; this entry's own numbers above are left as originally
+recorded (append-only), with this addendum as the pointer to what changed
+and why. No bootstrap CI exists for recovery fraction in this project --
+only the mean +/- sd over 5 calibration-subset splits already reported
+above (42.6% +/- 5.4 at +58d/N=50); none is invented here.
+
+**Robustness check: does the middle-level conclusion depend on using the
+flagged +58d cell as an anchor?** Re-run Result part 1's check anchored at
++42d (35.3%, 150 trials) instead of +58d, to +329d (9.3%, 161 trials) --
+both well above the trial threshold. This predicts **22.4% at +184d and
+15.6% at +259d**, a projected drop of **6.8 points** between them; the
+observed values (19.5%, 19.9%) instead rise slightly. Same conclusion as
+the +58d-anchored check, now without the flagged cell in it: the two
+measured mid-group points are flatter than a continuing linear decline
+predicts, which supports a distinct middle level and does not depend on
+the +58d anchor.

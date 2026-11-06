@@ -48,6 +48,10 @@ from matplotlib.patches import Patch
 
 REFERENCE_PER = 0.15765  # s05 validation PER measured WITHIN its training sessions (optimistic ceiling)
 NS = [10, 25, 50, 100]
+# Below this many evaluation trials (after de-duplication), a cell is too small to
+# trust (docs/FINDINGS.md: "...29 eval trials, too small to trust"). Only +58d/N=50
+# (29) falls below it; every other cell in the grid is comfortably above.
+MIN_RELIABLE_EVAL_TRIALS = 30
 # The two intervals the retracted "two sharp steps" claim was about, identified by the
 # sessions that bound them. Their day values are looked up from the input below, not
 # hardcoded, and asserted to be adjacent in the sorted list of measured elapsed times.
@@ -116,7 +120,12 @@ def main() -> None:
 
     sessions, days, cell = _load_arm3b_cells(args.input)
 
-    early = [100 * m((sid, 50), "frac") for sid in sessions if days[sid] <= 58]
+    def reliable(sid, n):
+        return min(cell[(sid, n)]["nev"]) >= MIN_RELIABLE_EVAL_TRIALS
+
+    # The title's ranges must not be set by a flagged (too-few-eval-trial) cell:
+    # docs/FINDINGS.md "Recovery fraction's 'two sharp steps' withdrawn...", addendum.
+    early = [100 * m((sid, 50), "frac") for sid in sessions if days[sid] <= 58 and reliable(sid, 50)]
     mid = [100 * m((sid, 50), "frac") for sid in sessions if 184 <= days[sid] <= 259]
     late = [100 * m((sid, 50), "frac") for sid in sessions if days[sid] >= 329]
 
@@ -151,7 +160,7 @@ def main() -> None:
         x = [days[sid] for sid in sess]
         y = [100 * m((sid, n), "frac") for sid in sess]
         e = [100 * s((sid, n), "frac") for sid in sess]
-        small = [min(cell[(sid, n)]["nev"]) < 30 for sid in sess]
+        small = [not reliable(sid, n) for sid in sess]
         for xi, yi, ei, sm in zip(x, y, e, small):
             ax.errorbar([xi], [yi], yerr=[ei], color=color, marker=marker, linewidth=0, markersize=8,
                         markerfacecolor=SURFACE if sm else color, markeredgecolor=color if sm else SURFACE,
@@ -182,11 +191,12 @@ def main() -> None:
                            "Error bars: ±1 sd over 5 calibration subsets.", fontsize=9.5, color=INK2, ha="left")
     fig.text(0.012, 0.012, "0% = no better than no adaptation; 100% = back to 0.158, the s05 model's validation PER measured inside its training sessions "
                           "(an optimistic ceiling, so these are lower bounds on recoverability).\n"
-                          "Hollow marker = fewer than 30 evaluation trials left after de-duplication (+58d, N=50: 29). N=10/100 not run at +184d/+259d (gap-fill covered N=25/50 only); "
-                          "N=100 impossible at +58d/+597d (too few trials).\nShaded intervals contain no evaluated session (126d, 70d): the data cannot distinguish an abrupt change from a gradual one across either one. "
+                          f"Hollow marker = fewer than {MIN_RELIABLE_EVAL_TRIALS} evaluation trials left after de-duplication -- the only such cell in this grid is +58d, N=50 (29); its value is plotted "
+                          "but excluded from the title's +58d-group range above.\nN=10/100 not run at +184d/+259d (gap-fill covered N=25/50 only); N=100 impossible at +58d/+597d (too few trials).\n"
+                          "Shaded intervals contain no evaluated session (126d, 70d): the data cannot distinguish an abrupt change from a gradual one across either one. "
                           "Below 0% at +9d, N=10: fine-tuning on 10 sentences hurt.",
            fontsize=8.5, color=INK2, ha="left", va="bottom")
-    fig.subplots_adjust(left=0.075, right=0.985, top=0.84, bottom=0.185)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.84, bottom=0.25)
 
     args.figure_output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.figure_output, dpi=args.dpi)
