@@ -46,7 +46,7 @@ statistics does not change the curve's shape.
 |---|---|---|
 | **Measurement** | PER rises steeply for ~150 days, then plateaus. The shape replicates across four independently-trained cut points. | 0.277 → 0.745 over the first 126 days (s05); early/late slope ratio 15–24× (s05, s10, s15) |
 | **Attribution** | Channel death is ruled out. Three measured changes are confirmed instead: signal-to-noise loss, phoneme tuning change, and subspace rotation. All three track elapsed time closely, so this design cannot rank them against each other. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Pairwise \|ρ\|=0.70–0.90, falling to ≤0.32 and non-significant once elapsed time is controlled for (n=27) |
-| **Decision** | Full fine-tuning wins at every elapsed time measured, does not restore day-zero function, and a minimum viable budget exists below which recalibrating hurts. Both the signal and the method limit recovery, and this design cannot separate their contributions. | Recovers 31–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing). Matched-decoder Switchboard PER: 0.199 early → 0.356 late (+78.8%). Headroom: +597d full fine-tuning reaches 0.718 vs. 0.356 for a better-resourced decoder on the same sessions |
+| **Decision** | Full fine-tuning wins at every elapsed time measured, does not restore day-zero function, and a minimum viable budget exists below which recalibrating hurts. Both the signal and the method limit recovery, and this design cannot separate their contributions. | Recovers 31–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing). Matched-decoder Switchboard PER: 0.199 early (n=864) → 0.356 late (n=173) (+78.8%). Headroom: +597d full fine-tuning reaches 0.718 vs. 0.356 for a better-resourced decoder on the same sessions |
 
 (Also in `results/summary_table.csv`.)
 
@@ -102,8 +102,8 @@ what proportion.
 
 The signal itself degrades. Holding model, data quantity, corpus and
 evaluation protocol constant within a single decoder trained on all 45
-sessions, Switchboard error rises from 0.199 on early sessions to 0.356
-on late ones, a 78.8% relative increase.
+sessions, Switchboard error rises from 0.199 on early sessions (n=864
+trials) to 0.356 on late ones (n=173 trials), a 78.8% relative increase.
 
 But recalibration is not near its limit either. At +597 days full
 fine-tuning reaches 0.718, well above the 0.356 a better-resourced
