@@ -2,12 +2,7 @@
 
 This file records design decisions and their justification, as they
 stand now. `docs/DATASET.md` records WHAT the data is; `docs/FINDINGS.md`
-records the dated empirical investigations behind these decisions. When
-a decision changes, replace the old text with the new decision and its
-measured justification, plus a one-line pointer to the FINDINGS.md entry
-recording the change. Do not narrate the revision here. If this file
-exceeds 400 lines, the excess is almost always revision narrative that
-belongs in FINDINGS.md. Target length: under 400 lines.
+records the dated empirical investigations behind these decisions.
 
 ## Summary
 
@@ -18,8 +13,8 @@ strategies under a fixed budget of participant time.
 - **Measurement**: how fast does PER degrade with days since calibration?
 - **Attribution**: settled (section 6). SNR loss, tuning change, and
   subspace rotation confirmed and confounded; channel death ruled out.
-- **Decision**: settled (section 5). Full fine-tuning wins throughout;
-  recalibration slows decline but does not restore function.
+- **Viability**: settled (section 5). No: full fine-tuning is the best
+  of the tested arms, but none of them restores day-zero function.
 
 **Split:** train on an early block of sessions, swept at four cut points
 (1–5/1–10/1–15/1–20); evaluate each later session individually as a
@@ -91,15 +86,15 @@ common, easy mistake: keep them separate in every results table.
   calibration?
 - **ATTRIBUTION**: Why does it degrade? See section 6 for the three
   measured changes examined.
-- **DECISION**: Given a fixed budget of participant time on a new day,
-  what is the best thing to spend it on? See section 5 for the candidate
-  interventions ("arms").
+- **VIABILITY**: Can a decoder trained once on early sessions be kept
+  usable by recalibrating it on a small amount of new labeled data? See
+  section 5 for the candidate interventions ("arms") tested as evidence.
 
 ---
 
-## 5. Recalibration strategies (Question 3 arms)
+## 5. Recalibration strategies (Viability arms)
 
-Candidate interventions for the DECISION question, increasing order of
+Candidate interventions for the VIABILITY question, increasing order of
 participant-time cost. Phase 3 split Arm 3 into 3a/3b below.
 
 | Arm | Labels needed | Targets | Params updated | Participant time | Learning rate | Step/epoch budget | Notes |
@@ -128,8 +123,8 @@ identity-day-layer redirect control, repeated under diagonal day layers").
 | 2: day layer, backbone frozen | **CLOSED**: at a safe lr the layer barely leaves identity (max\|scale−1\|≈0.004); 1,024 params is enough to be stable under joint training, not enough to correct one new day | "A diagonal day layer lacks the capacity to correct accumulated drift" |
 | 3b: full fine-tune | **WINS** at every elapsed time measured except +9d at N=10 (worse than nothing there: a minimum viable budget exists below which recalibration is counterproductive) | "Full fine-tuning is the best use of a fixed participant-time budget...", "There is a minimum viable calibration budget..." |
 
-**Answer to Question 3:** spend the budget on full fine-tuning. It slows the PER decline but
-does not restore day-0 function, recovery-fraction declines from roughly 33% early to roughly
+**Answer to Viability:** No. Full fine-tuning is the best of the tested arms, and it still
+does not restore day-0 function: recovery-fraction declines from roughly 33% early to roughly
 11% beyond +329d (N=50 only, unflagged cells), and a minimum viable budget exists below which
 recalibration hurts (`docs/FINDINGS.md`: "Recalibration slows the decline but does
 not restore function").
@@ -375,6 +370,15 @@ optimizer's first step, or use a fresh optimizer for that phase.
   from a gradual one across either gap; closing this requires sessions evaluated inside
   those windows (`docs/FINDINGS.md`: "'Two sharp steps' withdrawn: three measured levels,
   two transitions of unresolved sharpness").
+- **Only labeled recalibration was tested.** Methods that adapt from
+  unlabeled activity are not evaluated here, and that is where the
+  working methods in the literature sit.
+- **The budget sweep caps at 100 labeled sentences**, so whether recovery
+  saturates was never observed. Current systems create a new
+  day-specific component from 5-6 sentences, and pretrained-encoder
+  approaches report usable adaptation from under a minute of labeled
+  data. More labeled speech is not where the solution is expected to
+  come from.
 
 ---
 

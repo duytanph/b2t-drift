@@ -20,8 +20,8 @@ Three questions, in increasing order of how much they matter practically:
 1. **Measurement**: how fast does decoding accuracy degrade as calibration
    data recedes into the past?
 2. **Attribution**: what in the neural signal is actually changing?
-3. **Decision**: given a fixed budget of a participant's time on a new
-   day, what is the best use of it?
+3. **Viability**: can a decoder trained once on early sessions be kept
+   usable by recalibrating it on a small amount of new labeled data?
 
 ## Headline result
 
@@ -49,7 +49,7 @@ statistics does not change the curve's shape.
 |---|---|---|
 | **Measurement** | PER rises steeply for ~150 days, then plateaus. The shape replicates across four independently-trained cut points. | 0.277 → 0.745 over the first 126 days (s05); early/late slope ratio 15–24× (s05, s10, s15) |
 | **Attribution** | Channel death is ruled out. Three measured changes are confirmed instead: signal-to-noise loss, phoneme tuning change, and subspace rotation. All three track elapsed time closely, so this design cannot rank them against each other. | SNR loss: TX declines 26× faster than SBP. Tuning change: −0.056/100d, survives a healthy-channel control. Subspace rotation: 3.17°/100d, tracks PER at ρ=0.908. Pairwise \|ρ\|=0.70–0.90, falling to ≤0.32 and non-significant once elapsed time is controlled for (n=27) |
-| **Decision** | Full fine-tuning wins at every elapsed time measured, does not restore day-zero function, and a minimum viable budget exists below which recalibrating hurts. Both the signal and the method limit recovery, and this design cannot separate their contributions. | Recovers 31–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing). Matched-decoder Switchboard PER: 0.199 early (n=864) → 0.356 late (n=173) (+78.8%). Headroom: +597d full fine-tuning reaches 0.718 vs. 0.356 for a better-resourced decoder on the same sessions |
+| **Viability** | No: a decoder frozen after early training cannot be rescued by labeled recalibration at any tested budget. Full fine-tuning comes closest but does not restore day-zero function, and a minimum viable budget exists below which recalibrating hurts. Both the signal and the method limit recovery, and this design cannot separate their contributions. | Headroom: +597d full fine-tuning reaches 0.718 vs. 0.356 for a better-resourced decoder on the same sessions. Recovers 31–48% of accumulated drift within 2 months (N=50–100), 9–14% past 300 days. At +9 days, N=10 gives −8.8% (worse than nothing). Matched-decoder Switchboard PER: 0.199 early (n=864) → 0.356 late (n=173) (+78.8%) |
 
 (Also in `results/summary_table.csv`.)
 
@@ -103,13 +103,29 @@ change in the recorded features; this figure does not establish that
 they share one physical cause, and does not rank them against each
 other.*
 
-**Decision.** Full fine-tuning wins at every elapsed time measured,
-recovering 31–48% of accumulated drift within two months (the min/max
-across calibration budgets N=50–100 for sessions within 60 days) and
-9–14% past 300 days. It slows the decline; it does not restore day-zero
-function. A minimum viable budget exists below which recalibration
-actively hurts: at +9 days, ten labeled sentences leave the decoder
-worse than doing nothing (−8.8%).
+**Viability.** No. A decoder trained once on sessions 1-5 and
+recalibrated on a small block of newly labeled sentences does not
+recover usable performance at any elapsed time past the first two
+months.
+
+Six adaptation strategies were tested, spanning 0 to roughly 15.0
+million (15,018,537) trained parameters, from no adaptation at all
+through label-free linear alignment to full fine-tuning. Each ran at
+budgets of 10, 25, 50 and 100 labeled sentences across seven elapsed
+times from +9 to +597 days.
+
+The best result anywhere in that grid at +597 days is 0.718 PER. A
+decoder trained on accumulated data from those same sessions reaches
+0.356. That is a factor of two, not a near miss.
+
+Below a minimum budget, recalibration is actively harmful. At +9 days,
+ten labeled sentences leave the decoder worse than leaving it alone
+(-8.8% recovery).
+
+Partial recovery is real but does not change the verdict. Full
+fine-tuning recovers 31-48% of accumulated drift within two months and
+9-14% past 300 days. At no point does that produce a decoder anyone
+could use.
 
 Two things limit how much is recoverable, and this design cannot say in
 what proportion.
@@ -131,10 +147,16 @@ whole recording, which no recalibration protocol can do. That bound is
 unmeasured, and the honest reading is that the shortfall is part signal
 and part method, in unknown proportion.
 
-The practical consequence is a change of question. Front-loading
-calibration at implant buys roughly three months of advantage rather
-than durable performance, so the useful question is not how much to
-collect once but how often, and how cheaply, to top up.
+Ruling this out matters because the alternative is expensive. Current
+systems stay accurate by retaining every session indefinitely and
+retraining the full model before each use. A decoder frozen after early
+training would need neither, which is an attractive property for a
+deployed device. These results say that architecture does not survive
+labeled recalibration at feasible budgets.
+
+This tests the labeled branch only. Methods that adapt from unlabeled
+activity, which is what the systems that stay accurate over months
+actually use, are not evaluated here.
 
 ## What contradicted my predictions
 
@@ -202,12 +224,28 @@ results were tested, not assembled to fit a story.
   trend, extrapolated to 45 sessions, to within about 1%, suggesting the
   pass threshold itself was set too tight, noted post hoc with the
   pre-registered threshold left unchanged.
+- Only labeled recalibration was tested. Methods that adapt from
+  unlabeled activity are not evaluated here, and that is where the
+  working methods in the literature sit.
+- The budget sweep caps at 100 labeled sentences, so whether recovery
+  saturates was never observed. Note the direction of the field: current
+  systems create a new day-specific component from 5-6 sentences, and
+  pretrained-encoder approaches report usable adaptation from under a
+  minute of labeled data. More labeled speech is not where the solution
+  is expected to come from.
 
 ## What I'd do next
 
-- Split calibration and evaluation trials sequentially within a session
-  (calibrate on the first N, evaluate on what follows) rather than
-  randomly, to match a real deployment.
+- The untested branch is continual adaptation from unlabeled activity,
+  using pseudo-labels derived from the decoder's own output rather than
+  transcribed sentences. This is what the methods that hold accuracy
+  over months in the literature actually use, and this project did not
+  test it. See CORP (arXiv:2311.03611), which reports 403-day
+  brain-to-text stability using language-model-corrected pseudo-labels,
+  and the retrospective target-inference work for cursor BCIs (*Nature
+  Biomedical Engineering*, s41551-025-01536-z). CORP's approach needs a
+  language model, which this project cannot run at 16 GB RAM. That is
+  why it reports PER rather than WER.
 - Add sessions in the two elapsed-time windows with no evaluated session
   (+58d-+184d, +259d-+329d) to find out whether recovery fraction changes
   abruptly there or just gradually, which the current sampling can't tell.

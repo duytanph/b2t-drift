@@ -1760,6 +1760,8 @@ least (SBP) is not thereby protected from drift.
 
 ### Full fine-tuning is the best use of a fixed participant-time budget, at every elapsed time measured (2026-09-23)
 
+**PARTIALLY SUPERSEDED by "Question 3 reframed as Viability: a feasibility verdict, not an arm ranking" (2026-11-06).** Only the framing of this entry's ranking as the answer to Question 3 is superseded: Question 3 is renamed Viability and now asks whether labeled recalibration can rescue a frozen decoder at all, answered no. The per-arm, per-session, per-budget PER numbers below are NOT superseded and now serve as evidence for that verdict instead of as a competition result.
+
 **Question:** Of the four recalibration arms (0: no adaptation, 1:
 unsupervised alignment, 2: day layer only, 3b: full fine-tune; 3a:
 output layer only, added as an intermediate-cost point), which recovers
@@ -2990,3 +2992,38 @@ Both are left as originally recorded (append-only) -- the -23.1-point
 figure is not wrong, since it is the honest difference between two
 measured values, but a reader leaning on it specifically should prefer
 the -15.5-point (N=25) version, which carries no flagged-cell caveat.
+
+---
+
+### Question 3 reframed as Viability: a feasibility verdict, not an arm ranking (2026-11-06)
+
+**What it was:** Question 3 asked "given a fixed budget of a
+participant's time on a new day, what is the best use of it?",
+answered by ranking the recalibration arms against each other and
+naming Arm 3b (full fine-tuning) the winner (`docs/DESIGN.md` section
+5, and the "Full fine-tuning is the best use of a fixed
+participant-time budget..." entry above).
+
+**What it is now:** Question 3 is renamed Viability and asks "can a
+decoder trained once on early sessions be kept usable by recalibrating
+it on a small amount of new labeled data?", answered no.
+
+**Why the reframe:** The arms test a regime that deployed systems do
+not use. Every published system that stays accurate for months adapts
+continuously from unlabeled activity, not from a periodic block of
+newly transcribed sentences. Ranking five labeled-recalibration arms
+against each other answers a question nobody building a deployed
+system is asking. The same measurements support a more useful
+conclusion: a decoder frozen after early training and recalibrated on
+labeled data at feasible budgets does not recover usable performance
+at any elapsed time past the first two months. That negative result
+rules out an architecture that would be genuinely cheaper to operate
+had it worked, a conclusion worth stating directly rather than leaving
+implicit inside an arm-ranking table.
+
+**What did not change:** No measurement changed and no experiment was
+rerun. Every number behind the old ranking is unchanged, including the
+per-arm, per-session, per-budget PER values, the recovery-fraction
+grid, and the +9d/N=10 minimum-viable-budget result, and each is now
+read as evidence for the Viability verdict rather than as a competition
+result.
