@@ -27,6 +27,9 @@ Three questions, in increasing order of how much they matter practically:
 
 ![Headline figure: the decoder degrades steeply then plateaus, and recalibration's power to fix that degradation collapses right along with it](figures/headline.png)
 
+*The decoder degrades steeply then plateaus, and recalibration's power to
+fix that degradation collapses right along with it.*
+
 (For every figure in this repo: which script generates it and whether it's
 reproducible without the raw T15 data, see `figures/PROVENANCE.md`.)
 
@@ -64,8 +67,6 @@ without flattening the curve: s15's earliest held-out session sits at
 0.177 against s05's 0.277, and by ~100 days all four cuts fall within
 0.032 of each other despite a 3.7x range in training-set size.
 
-![Attribution verdict: five panels against days since cut -- s05 held-out PER for reference; SNR loss (TX vs. SBP activity, each normalized to session 1); tuning change (phoneme-to-channel tuning-matrix correlation to a session-1 reference, all channels and healthy-channels-only); subspace rotation (mean principal angle to a session-1 reference); and channel death, the one ruled out (channels below a 2 Hz firing-rate floor, no reliable trend). SNR loss, tuning change, and subspace rotation are each a real, measured change in the recorded features; this figure does not establish that they share one physical cause, and does not rank them against each other.](figures/attribution_verdict.png)
-
 **Attribution.** Channel death is ruled out: only 2 of 256 electrodes
 crossed below a 2 Hz firing-rate floor and stayed there over 611 days,
 and the trend is not significant (p=0.131). Three measured changes are
@@ -88,6 +89,19 @@ other, not evidence that a single cause produced them. Array
 micromotion is the mechanism in the chronic-recording literature that
 would produce all three at once, and it is the most parsimonious
 reading, but nothing in this dataset measures array position.
+
+![Attribution verdict: five panels against days since cut -- s05 held-out PER for reference; SNR loss (TX vs. SBP activity, each normalized to session 1); tuning change (phoneme-to-channel tuning-matrix correlation to a session-1 reference, all channels and healthy-channels-only); subspace rotation (mean principal angle to a session-1 reference); and channel death, the one ruled out (channels below a 2 Hz firing-rate floor, no reliable trend). SNR loss, tuning change, and subspace rotation are each a real, measured change in the recorded features; this figure does not establish that they share one physical cause, and does not rank them against each other.](figures/attribution_verdict.png)
+
+*Five panels against days since cut: s05 held-out PER for reference; SNR
+loss (TX vs. SBP activity, each normalized to session 1); tuning change
+(phoneme-to-channel tuning-matrix correlation to a session-1 reference,
+all channels and healthy-channels-only); subspace rotation (mean
+principal angle to a session-1 reference); and channel death, the one
+ruled out (channels below a 2 Hz firing-rate floor, no reliable trend).
+SNR loss, tuning change, and subspace rotation are each a real, measured
+change in the recorded features; this figure does not establish that
+they share one physical cause, and does not rank them against each
+other.*
 
 **Decision.** Full fine-tuning wins at every elapsed time measured,
 recovering 31–48% of accumulated drift within two months (the min/max
