@@ -92,14 +92,14 @@ reading, but nothing in this dataset measures array position.
 
 ![Attribution verdict: five panels against days since cut -- s05 held-out PER for reference; SNR loss (TX vs. SBP activity, each normalized to session 1); tuning change (phoneme-to-channel tuning-matrix correlation to a session-1 reference, all channels and healthy-channels-only); subspace rotation (mean principal angle to a session-1 reference); and channel death, the one ruled out (channels below a 2 Hz firing-rate floor, no reliable trend). SNR loss, tuning change, and subspace rotation are each a real, measured change in the recorded features; this figure does not establish that they share one physical cause, and does not rank them against each other.](figures/attribution_verdict.png)
 
-*Five panels against days since cut: s05 held-out PER for reference; SNR
-loss (TX vs. SBP activity, each normalized to session 1); tuning change
+*Five panels against days since cut: 1) s05 held-out PER for reference, 2) SNR
+loss (TX vs. SBP activity, each normalized to session 1), 3) tuning change
 (phoneme-to-channel tuning-matrix correlation to a session-1 reference,
-all channels and healthy-channels-only); subspace rotation (mean
-principal angle to a session-1 reference); and channel death, the one
+all channels and healthy-channels-only), 4) subspace rotation (mean
+principal angle to a session-1 reference), and 5) channel death, the one
 ruled out (channels below a 2 Hz firing-rate floor, no reliable trend).
 SNR loss, tuning change, and subspace rotation are each a real, measured
-change in the recorded features; this figure does not establish that
+change in the recorded features. This figure does not establish that
 they share one physical cause, and does not rank them against each
 other.*
 
