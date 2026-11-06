@@ -156,7 +156,7 @@ def main() -> None:
     ])
     lax.text(0.0, 0.50, NOTES, transform=lax.transAxes, fontsize=9.2, color=INK2, va="top", linespacing=1.3)
 
-    fig.suptitle("Full fine-tuning recovers PER at every elapsed time; label-free alignment and small labeled updates barely move it  (sentence-de-duplicated PER)",
+    fig.suptitle("Full fine-tuning moves PER most at every elapsed time, but no arm restores usable performance  (sentence-de-duplicated PER)",
                  x=0.012, y=0.985, ha="left", fontsize=15, fontweight="bold", color=INK)
     fig.text(0.012, 0.952, "Held-out phoneme error rate vs. minutes of new-day calibration, by evaluation session "
                            "(decoder trained on sessions 1-5)", fontsize=10.5, color=INK2, ha="left")

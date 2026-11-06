@@ -36,8 +36,9 @@ reproducible without the raw T15 data, see `figures/PROVENANCE.md`.)
 The decoder's accuracy collapses over the first five months and then
 holds roughly flat, replicated across all four independently-trained cut
 points (top, s05/s10/s15/s20). Full fine-tuning on a handful of new-day
-sentences recovers a large share of that loss early on, but its ceiling
-declines substantially over the same months (bottom, s05 only).
+sentences offsets part of that loss early on. It never restores
+day-zero performance, and its ceiling declines substantially over the
+same months (bottom, s05 only).
 The four s05 sessions below the 50-trial viability threshold (hollow
 markers, top) are shown rather than dropped; they sit on the same
 trajectory as their neighbors, so excluding them from the fitted

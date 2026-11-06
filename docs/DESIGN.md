@@ -6,9 +6,10 @@ records the dated empirical investigations behind these decisions.
 
 ## Summary
 
-Speech BCI decoders lose accuracy across days; this project measures that
-loss, attributes it to specific causes, and compares recalibration
-strategies under a fixed budget of participant time.
+Speech BCI decoders lose accuracy across days. This repo quantifies that
+loss, attributes it to specific changes in the recorded features, and
+tests whether a decoder frozen after early-session training can be
+rescued by labeled recalibration.
 
 - **Measurement**: how fast does PER degrade with days since calibration?
 - **Attribution**: settled (section 6). SNR loss, tuning change, and
@@ -31,11 +32,6 @@ check.
 ---
 
 ## 1. Thesis
-
-Speech BCI decoders lose accuracy across days; this repo quantifies the
-loss, attributes it to specific changes in the recorded features, and
-compares recalibration strategies under a fixed budget of user time (see
-Summary above for the one-paragraph version).
 
 ---
 
@@ -228,10 +224,9 @@ pretrained checkpoint has no held-out future and is useful only for validating o
   per epoch. **Cost, accepted deliberately:** batches are non-i.i.d. in
   sentence length, standard practice in speech recognition, not a bug.
 - **DataLoader: `num_workers=2`, `persistent_workers=True`, `pin_memory=True`.** Settled by a real SSD measurement:
-  wait is under 2% of epoch time at `num_workers >= 1`, GPU compute dominates. **Benchmarking rule, violated twice:** a synthetic
-  benchmark must match the real access pattern, real data dimensions, and cite its source for any measured parameter -- violated here (page-cache
-  hits, not real SSD reads) and by the GPU benchmark below (uncited `seq_len=527`) (`docs/FINDINGS.md`: "Storage medium, not DataLoader
-  configuration, was the training bottleneck").
+  wait is under 2% of epoch time at `num_workers >= 1`, GPU compute dominates. **Benchmarking rule:** a synthetic
+  benchmark must match the real access pattern, real data dimensions, and cite its source for any measured parameter
+  (`docs/FINDINGS.md`: "Storage medium, not DataLoader configuration, was the training bottleneck").
 - **Normalization is already applied upstream**: a rolling per-channel,
   per-sentence window, NOT per-block/session/global (`docs/DATASET.md`
   section 9 item 7). `data/normalize.py` must not implement its own.
