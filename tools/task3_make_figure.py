@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import statistics as st
+import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -129,6 +130,15 @@ def main() -> None:
     handles.append(Line2D([0], [0], color=INK2, linewidth=1.5, label="Arm 0  no adaptation (day-0 decoder)"))
     lax.legend(handles=handles, loc="upper left", frameon=False, fontsize=10.5,
                labelcolor=INK, handlelength=2.8, borderaxespad=0, labelspacing=0.9)
+    # Derived from the grid, not hardcoded, so this can't drift out of sync
+    # with the panel titles' own TOTAL_TRIALS-derived labels above.
+    missing_100 = [s for s in SESSIONS if not have("0", s, 100)]
+    n100_line = (
+        "N=100 is impossible at "
+        + " and ".join(f"+{days[s]} d ({TOTAL_TRIALS[s]} trials)" for s in missing_100)
+        + "; those points are absent, not zero."
+    )
+
     NOTES = "\n".join([
         "Solid lines need transcribed sentences; dashed lines use",
         "recorded neural features only (transcripts discarded).",
@@ -137,8 +147,7 @@ def main() -> None:
         f"panel's y-axis spans the same {Y_SPAN:.2f} of PER, so vertical gaps",
         "compare across panels.",
         "",
-        "N=100 is impossible at +58 d (83 trials) and +597 d (94",
-        "trials); those points are absent, not zero.",
+        *textwrap.wrap(n100_line, width=57),
         "",
         "Arm 2's rate is capped by its failure at higher rates on +329 d.",
         "",

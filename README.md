@@ -34,7 +34,7 @@ The decoder's accuracy collapses over the first five months and then
 holds roughly flat, replicated across all four independently-trained cut
 points (top, s05/s10/s15/s20); full fine-tuning on a handful of new-day
 sentences recovers a large share of that loss early on, but its ceiling
-falls just as sharply as the decoder itself degrades (bottom, s05 only).
+declines substantially over the same months (bottom, s05 only).
 The four s05 sessions below the 50-trial viability threshold (hollow
 markers, top) are shown rather than dropped; they sit on the same
 trajectory as their neighbors, so excluding them from the fitted
@@ -63,6 +63,8 @@ in that comparison, not a contradiction of it). Across cut points, more calibrat
 without flattening the curve: s15's earliest held-out session sits at
 0.177 against s05's 0.277, and by ~100 days all four cuts fall within
 0.032 of each other despite a 3.7x range in training-set size.
+
+![Attribution verdict: five panels against days since cut -- s05 held-out PER for reference; SNR loss (TX vs. SBP activity, each normalized to session 1); tuning change (phoneme-to-channel tuning-matrix correlation to a session-1 reference, all channels and healthy-channels-only); subspace rotation (mean principal angle to a session-1 reference); and channel death, the one ruled out (channels below a 2 Hz firing-rate floor, no reliable trend). SNR loss, tuning change, and subspace rotation are each a real, measured change in the recorded features; this figure does not establish that they share one physical cause, and does not rank them against each other.](figures/attribution_verdict.png)
 
 **Attribution.** Channel death is ruled out: only 2 of 256 electrodes
 crossed below a 2 Hz firing-rate floor and stayed there over 611 days,
@@ -148,8 +150,8 @@ results were tested, not assembled to fit a story.
   omit entirely: removing a trained slice costs only −0.0004 PER.
 - **Predicted:** recalibration would help most where drift is worst,
   since that's where there's the most room to recover. **Found:** its
-  effectiveness falls sharply with elapsed time instead: the sessions
-  with the most drift benefit the least from a fixed labeled budget.
+  effectiveness declines substantially with elapsed time instead: the
+  sessions with the most drift benefit the least from a fixed labeled budget.
 
 ## Limitations
 
