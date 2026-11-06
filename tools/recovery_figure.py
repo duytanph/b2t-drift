@@ -143,6 +143,29 @@ def main() -> None:
         )
         bands.append((x0, x1))
 
+    # Not every N is measured at every elapsed time: a curve with a missing point is
+    # drawn straight across that gap, the same defect the retracted "two sharp steps"
+    # claim had, just for fewer lines. State which budgets skip which elapsed times
+    # and their largest unmeasured span, derived from the data (docs/FINDINGS.md:
+    # "Recovery fraction's 'two sharp steps' withdrawn...", this round's follow-up).
+    ragged_notes = []
+    for n in NS:
+        present = sorted(days[sid] for sid in sessions if have((sid, n)))
+        missing = [d for d in sorted_days if d not in present]
+        if not missing:
+            continue
+        gaps = [(present[i], present[i + 1], present[i + 1] - present[i]) for i in range(len(present) - 1)]
+        g0, g1, gd = max(gaps, key=lambda g: g[2])
+        ragged_notes.append(
+            f"N={n} has no point at {'/'.join(f'+{d}d' for d in missing)} "
+            f"(longest unmeasured span: +{g0}d to +{g1}d, {gd}d)"
+        )
+    ragged_caption = (
+        "\n".join(n + "." for n in ragged_notes)
+        + "\nN=25 and N=50 are measured at all seven elapsed times; a line segment spanning "
+        "a missing point (N=10, N=100 only) is interpolated straight across it, not measured."
+    )
+
     fig, ax = plt.subplots(figsize=(11, 6.6))
     ax.set_xlim(-15, 780)
     ax.set_ylim(-20, 58)
@@ -191,12 +214,13 @@ def main() -> None:
                            "Error bars: ±1 sd over 5 calibration subsets.", fontsize=9.5, color=INK2, ha="left")
     fig.text(0.012, 0.012, "0% = no better than no adaptation; 100% = back to 0.158, the s05 model's validation PER measured inside its training sessions "
                           "(an optimistic ceiling, so these are lower bounds on recoverability).\n"
-                          f"Hollow marker = fewer than {MIN_RELIABLE_EVAL_TRIALS} evaluation trials left after de-duplication -- the only such cell in this grid is +58d, N=50 (29); its value is plotted "
-                          "but excluded from the title's +58d-group range above.\nN=10/100 not run at +184d/+259d (gap-fill covered N=25/50 only); N=100 impossible at +58d/+597d (too few trials).\n"
+                          f"Hollow marker = fewer than {MIN_RELIABLE_EVAL_TRIALS} evaluation trials after de-duplication (only +58d, N=50: 29). Its value is plotted but excluded from the "
+                          "title's ranges (N=50 only, unflagged cells).\n"
+                          f"{ragged_caption}\n"
                           "Shaded intervals contain no evaluated session (126d, 70d): the data cannot distinguish an abrupt change from a gradual one across either one. "
                           "Below 0% at +9d, N=10: fine-tuning on 10 sentences hurt.",
            fontsize=8.5, color=INK2, ha="left", va="bottom")
-    fig.subplots_adjust(left=0.075, right=0.985, top=0.84, bottom=0.25)
+    fig.subplots_adjust(left=0.075, right=0.985, top=0.84, bottom=0.29)
 
     args.figure_output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.figure_output, dpi=args.dpi)

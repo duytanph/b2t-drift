@@ -27,6 +27,9 @@ Three questions, in increasing order of how much they matter practically:
 
 ![Headline figure: the decoder degrades steeply then plateaus, and recalibration's power to fix that degradation collapses right along with it](figures/headline.png)
 
+(For every figure in this repo: which script generates it and whether it's
+reproducible without the raw T15 data, see `figures/PROVENANCE.md`.)
+
 The decoder's accuracy collapses over the first five months and then
 holds roughly flat, replicated across all four independently-trained cut
 points (top, s05/s10/s15/s20); full fine-tuning on a handful of new-day
@@ -85,7 +88,8 @@ would produce all three at once, and it is the most parsimonious
 reading, but nothing in this dataset measures array position.
 
 **Decision.** Full fine-tuning wins at every elapsed time measured,
-recovering 31–48% of accumulated drift within two months at N=50–100 and
+recovering 31–48% of accumulated drift within two months (the min/max
+across calibration budgets N=50–100 for sessions within 60 days) and
 9–14% past 300 days. It slows the decline; it does not restore day-zero
 function. A minimum viable budget exists below which recalibration
 actively hurts: at +9 days, ten labeled sentences leave the decoder

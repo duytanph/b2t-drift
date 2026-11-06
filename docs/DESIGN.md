@@ -128,11 +128,11 @@ identity-day-layer redirect control, repeated under diagonal day layers").
 | 2: day layer, backbone frozen | **CLOSED**: at a safe lr the layer barely leaves identity (max\|scale−1\|≈0.004); 1,024 params is enough to be stable under joint training, not enough to correct one new day | "A diagonal day layer lacks the capacity to correct accumulated drift" |
 | 3b: full fine-tune | **WINS** at every elapsed time measured except +9d at N=10 (worse than nothing there: a minimum viable budget exists below which recalibration is counterproductive) | "Full fine-tuning is the best use of a fixed participant-time budget...", "There is a minimum viable calibration budget..." |
 
-**Answer to Question 3:** spend the budget on full fine-tuning. It slows the
-PER decline but does not restore day-0 function, recovery-fraction declines
-from roughly 33% early to roughly 11% beyond +329d, and a minimum viable
-budget exists below which recalibration hurts (`docs/FINDINGS.md`:
-"Recalibration slows the decline but does not restore function").
+**Answer to Question 3:** spend the budget on full fine-tuning. It slows the PER decline but
+does not restore day-0 function, recovery-fraction declines from roughly 33% early to roughly
+11% beyond +329d (N=50 only, unflagged cells), and a minimum viable budget exists below which
+recalibration hurts (`docs/FINDINGS.md`: "Recalibration slows the decline but does
+not restore function").
 
 ---
 

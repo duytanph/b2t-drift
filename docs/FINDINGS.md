@@ -2978,3 +2978,15 @@ the +58d-anchored check, now without the flagged cell in it: the two
 measured mid-group points are flatter than a continuing linear decline
 predicts, which supports a distinct middle level and does not depend on
 the +58d anchor.
+
+**Caveat: the -23.1-point (N=50) drop also anchors on the flagged cell;
+the -15.5-point (N=25) version does not.** "Recalibration slows the
+decline but does not restore function" above reports the +58d-to-+184d
+drop as -15.5 points (N=25) / -23.1 points (N=50). The N=50 figure
+(42.6% -> 19.5%) is anchored on the same flagged +58d/N=50 cell (29 eval
+trials) as everything else in this addendum; the N=25 figure (28.4% ->
+12.8%) anchors on +58d/N=25, which has 54 eval trials and is not flagged.
+Both are left as originally recorded (append-only) -- the -23.1-point
+figure is not wrong, since it is the honest difference between two
+measured values, but a reader leaning on it specifically should prefer
+the -15.5-point (N=25) version, which carries no flagged-cell caveat.
