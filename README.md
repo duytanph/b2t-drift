@@ -175,37 +175,6 @@ actually use, are not evaluated here.
   diagonal parameterization's insufficiency and the full parameterization's
   training instability.
 
-## What contradicted my predictions
-
-Four places where the data said something different from what the
-underlying story would predict: the strongest evidence in this repo that these
-results were tested, not assembled to fit a story.
-
-- **Predicted:** an SBP-only decoder would be more drift-resistant than a
-  TX-only one, since SBP degrades 26× more slowly at the feature level.
-  **Found:** it is not. SBP-only's PER slope is 37% *steeper* than
-  TX-only's. TX and SBP are redundant views of the same underlying
-  spiking activity (median per-electrode correlation 0.72, stable across
-  611 days), so whatever degrades one decoder degrades the other.
-- **Predicted:** subspace rotation would be correctable, since it tracks
-  PER almost perfectly (ρ=0.908) and is a linear transform, which an
-  unsupervised alignment method can in principle undo. **Found:**
-  correcting it does not help. The benefit of an unsupervised alignment
-  runs *opposite* to the rotation's magnitude. Rotation is a correlate of
-  drift, not its correctable cause: a measurement can predict an outcome
-  almost perfectly and still be useless as an intervention target.
-- **Predicted:** a learned per-session input layer (a "day layer," a
-  small affine transform fit to one session's data, standard in this
-  literature) would be an essential part of the architecture. **Found:**
-  the full-rank version destabilizes joint training across many sessions
-  (val PER 0.332 vs. 0.169 for a much smaller version); constrained to a
-  per-channel-only ("diagonal") parameterization, it is nearly free to
-  omit entirely: removing a trained slice costs only −0.0004 PER.
-- **Predicted:** recalibration would help most where drift is worst,
-  since that's where there's the most room to recover. **Found:** its
-  effectiveness declines substantially with elapsed time instead: the
-  sessions with the most drift benefit the least from a fixed labeled budget.
-
 ## Limitations
 
 - **Single participant.** Every result here is one person's brain; none
