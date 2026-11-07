@@ -115,9 +115,7 @@ through label-free linear alignment to full fine-tuning. Each ran at
 budgets of 10, 25, 50 and 100 labeled sentences across seven elapsed
 times from +9 to +597 days.
 
-The best result anywhere in that grid at +597 days is 0.718 PER. A
-decoder trained on accumulated data from those same sessions reaches
-0.356.
+The best result anywhere in that grid at +597 days is 0.718 PER.
 
 Below a minimum budget, recalibration is actively harmful. At +9 days,
 ten labeled sentences leave the decoder worse than leaving it alone
@@ -141,13 +139,57 @@ fine-tuning reaches PER 0.718 on 44 held-out trials. A decoder trained
 on 8,072 trials reaches PER 0.356 on 173 Switchboard trials from the
 late period.
 
-Current systems stay accurate by keeping every recorded session 
-indefinitely and retraining the full model before each use. 
-A decoder frozen after early training would need neither, which 
-makes it far cheaper to deploy and far simpler to maintain. This 
-project tested whether that cheaper design can be kept working with 
-labeled recalibration, and found it cannot. The budgets tested 
-already exceed what deployed systems ask of their users.
+What neither measurement gives is the ceiling this question actually
+needs: the best achievable from a frozen decoder plus N new-day
+sentences. Reaching 0.356 required 8,072 training trials spanning the
+whole recording, which no recalibration protocol can do. That bound is
+unmeasured, and the honest reading is that the shortfall is part signal
+and part method, in unknown proportion.
+
+Current systems stay accurate by keeping every recorded session
+indefinitely and retraining the full model before each use. A decoder
+frozen after early training would need neither, which makes it far
+cheaper to deploy and far simpler to maintain. This project tested
+whether that cheaper design can be kept working with labeled
+recalibration, and found it cannot. The budgets tested already exceed
+what deployed systems ask of their users.
+
+This tests the labeled branch only. Methods that adapt from unlabeled
+activity, which is what the systems that stay accurate over months
+actually use, are not evaluated here.
+
+## Next steps
+
+- The untested branch is continual adaptation from unlabeled activity,
+  using pseudo-labels derived from the decoder's own output rather than
+  transcribed sentences. This is what the methods that hold accuracy
+  over months in the literature actually use, and this project did not
+  test it. See CORP (arXiv:2311.03611), which reports 403-day
+  brain-to-text stability using language-model-corrected pseudo-labels,
+  and the retrospective target-inference work for cursor BCIs (*Nature
+  Biomedical Engineering*, s41551-025-01536-z). CORP's approach needs a
+  language model, which this project cannot run at 16 GB RAM. That is
+  why it reports PER rather than WER.
+- Add sessions in the two elapsed-time windows with no evaluated session
+  (+58d-+184d, +259d-+329d) to find out whether recovery fraction changes
+  abruptly there or just gradually, which the current sampling can't tell.
+- Closed-loop evaluation: this dataset is offline-only and cannot
+  measure how a user adapts to a degrading or freshly-recalibrated
+  decoder.
+- Test whether a rank-constrained day layer sits usefully between the
+  diagonal parameterization's insufficiency and the full parameterization's
+  training instability.
+- Measured headroom at the settled architecture is 3,411 MB of 8,192 MiB at
+  batch=64 in fp32 (less in fp16, the shipped default), so training could
+  have run at batch 64 throughout: that halves the optimizer-step count
+  for a given epoch budget. Model A diverged at roughly 37,800 steps,
+  where batch=64 would have given about 18,900 for the same epoch budget.
+  Worth testing whether that changes the outcome, not a claim that
+  batch=64 would have prevented the divergence.
+- Every run here used a flat, hand-tuned learning rate with no scheduler or
+  warmup; a step-based schedule would likely transfer across training-set
+  sizes without retuning, and would plausibly have prevented both Model A's
+  divergence and the earlier Arm 2 learning-rate problem.
 
 ## What contradicted my predictions
 
@@ -224,39 +266,6 @@ results were tested, not assembled to fit a story.
   pretrained-encoder approaches report usable adaptation from under a
   minute of labeled data. More labeled speech is not where the solution
   is expected to come from.
-
-## What I'd do next
-
-- The untested branch is continual adaptation from unlabeled activity,
-  using pseudo-labels derived from the decoder's own output rather than
-  transcribed sentences. This is what the methods that hold accuracy
-  over months in the literature actually use, and this project did not
-  test it. See CORP (arXiv:2311.03611), which reports 403-day
-  brain-to-text stability using language-model-corrected pseudo-labels,
-  and the retrospective target-inference work for cursor BCIs (*Nature
-  Biomedical Engineering*, s41551-025-01536-z). CORP's approach needs a
-  language model, which this project cannot run at 16 GB RAM. That is
-  why it reports PER rather than WER.
-- Add sessions in the two elapsed-time windows with no evaluated session
-  (+58d-+184d, +259d-+329d) to find out whether recovery fraction changes
-  abruptly there or just gradually, which the current sampling can't tell.
-- Closed-loop evaluation: this dataset is offline-only and cannot
-  measure how a user adapts to a degrading or freshly-recalibrated
-  decoder.
-- Test whether a rank-constrained day layer sits usefully between the
-  diagonal parameterization's insufficiency and the full parameterization's
-  training instability.
-- Measured headroom at the settled architecture is 3,411 MB of 8,192 MiB at
-  batch=64 in fp32 (less in fp16, the shipped default), so training could
-  have run at batch 64 throughout: that halves the optimizer-step count
-  for a given epoch budget. Model A diverged at roughly 37,800 steps,
-  where batch=64 would have given about 18,900 for the same epoch budget.
-  Worth testing whether that changes the outcome, not a claim that
-  batch=64 would have prevented the divergence.
-- Every run here used a flat, hand-tuned learning rate with no scheduler or
-  warmup; a step-based schedule would likely transfer across training-set
-  sizes without retuning, and would plausibly have prevented both Model A's
-  divergence and the earlier Arm 2 learning-rate problem.
 
 ## Data and reproduction
 
