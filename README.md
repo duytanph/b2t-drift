@@ -1,21 +1,23 @@
 # b2t-drift
 
-Measures how much a speech brain-computer interface (BCI) degrades when it
-is calibrated once and never touched again, why, and whether a small
-amount of new labeled data can fix it.
+Measures how much a speech brain-computer interface (BCI) decoder
+degrades after being trained once on early sessions, what changes in the
+neural signal, and whether recalibrating on a small amount of new labeled
+data can restore it.
 
 ## The question
 
-Speech BCIs decode attempted speech from neural activity in real time, and
-every published system to date has relied on frequent recalibration to
-stay accurate. Nobody has published what happens to a *frozen* decoder
-(one calibrated on day one and never adjusted again) over the timescale
-that matters for a chronic implant: months, not days. The T15
-Brain-to-Text '25 dataset is, as far as I know, the only public
-intracortical speech dataset that spans long enough (20 months, 45
-sessions) to find out.
+Speech BCIs decode attempted speech from neural activity in real time,
+and every published system to date stays accurate by accumulating
+sessions and retraining on all of them. A decoder that could be trained
+once on early sessions and kept usable with small recalibrations would
+need none of that accumulation. Nobody has published how far such a
+decoder degrades over the timescale that matters for a chronic implant:
+months, not days. The T15 Brain-to-Text '25 dataset is, as far as I know,
+the only public intracortical speech dataset that spans long enough (20
+months, 45 sessions) to find out.
 
-Three questions, in increasing order of how much they matter practically:
+This project asks three questions:
 
 1. **Measurement**: how fast does decoding accuracy degrade as calibration
    data recedes into the past?
