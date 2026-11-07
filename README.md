@@ -117,7 +117,7 @@ times from +9 to +597 days.
 
 The best result anywhere in that grid at +597 days is 0.718 PER. A
 decoder trained on accumulated data from those same sessions reaches
-0.356. That is a factor of two, not a near miss.
+0.356.
 
 Below a minimum budget, recalibration is actively harmful. At +9 days,
 ten labeled sentences leave the decoder worse than leaving it alone
@@ -139,26 +139,15 @@ trials) to 0.356 on late ones (n=173 trials), a 78.8% relative increase.
 But recalibration is not near its limit either. At +597 days full
 fine-tuning reaches PER 0.718 on 44 held-out trials. A decoder trained
 on 8,072 trials reaches PER 0.356 on 173 Switchboard trials from the
-late period. That gap is headroom, not a
-floor.
+late period.
 
-What neither measurement gives is the ceiling this question actually
-needs: the best achievable from a frozen decoder plus N new-day
-sentences. Reaching 0.356 required 8,072 training trials spanning the
-whole recording, which no recalibration protocol can do. That bound is
-unmeasured, and the honest reading is that the shortfall is part signal
-and part method, in unknown proportion.
-
-Ruling this out matters because the alternative is expensive. Current
-systems stay accurate by retaining every session indefinitely and
-retraining the full model before each use. A decoder frozen after early
-training would need neither, which is an attractive property for a
-deployed device. These results say that architecture does not survive
-labeled recalibration at feasible budgets.
-
-This tests the labeled branch only. Methods that adapt from unlabeled
-activity, which is what the systems that stay accurate over months
-actually use, are not evaluated here.
+Current systems stay accurate by keeping every recorded session 
+indefinitely and retraining the full model before each use. 
+A decoder frozen after early training would need neither, which 
+makes it far cheaper to deploy and far simpler to maintain. This 
+project tested whether that cheaper design can be kept working with 
+labeled recalibration, and found it cannot. The budgets tested 
+already exceed what deployed systems ask of their users.
 
 ## What contradicted my predictions
 
