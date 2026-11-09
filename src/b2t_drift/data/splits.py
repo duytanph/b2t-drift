@@ -7,7 +7,7 @@ evaluation, and in anyone re-checking the result later. Recomputing it
 inline in a training script risks two runs silently using different splits
 (a config default changes, a session gets added to the data directory,
 someone edits a cut point) with no record of what actually happened.
-Writing it once to `splits/*.json` (`docs/CLAUDE.md`) makes the split
+Writing it once to `splits/*.json` (`CLAUDE.md`) makes the split
 itself an auditable, diffable, git-tracked fact, not a side effect of
 whatever code happened to run.
 
