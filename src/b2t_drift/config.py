@@ -1,8 +1,8 @@
 """Config loading and validation.
 
-Responsible for reading the YAML files under `configs/` (data, model, and
-experiment configs) and turning them into typed objects that the rest of the
-library consumes. No training or data logic lives here.
+Responsible for reading the YAML files under `configs/data/` and turning
+them into a typed `DataConfig` that the rest of the library consumes. No
+training or data logic lives here.
 """
 
 from __future__ import annotations

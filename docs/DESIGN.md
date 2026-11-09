@@ -242,7 +242,7 @@ trials).
   (`docs/FINDINGS.md`: "Storage medium, not DataLoader configuration, was the training bottleneck").
 - **Normalization is already applied upstream**: a rolling per-channel,
   per-sentence window, NOT per-block/session/global (`docs/DATASET.md`
-  section 9 item 7). `data/normalize.py` must not implement its own.
+  section 9 item 7). This project must not implement its own.
 - **Shipped training runs use fp16 (`amp=True`) -- confirmed from `configs/experiment/switchboard_baseline.yaml`, not memory.**
   This project's settled architecture (3L/512H, patch 14/4), measured on a real training run: peak GPU memory **1,346 MB** at batch=32/fp16/real
   lengths (`docs/FINDINGS.md`: "Late-period ceiling measured directly..."), comfortably under 8,192 MiB. Re-measured at the settled architecture in
