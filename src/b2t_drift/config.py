@@ -36,23 +36,6 @@ class DataConfig:
     seq_class_ids_padded_length: int
 
 
-@dataclass
-class ExperimentConfig:
-    """Typed view of a `configs/experiment/*.yaml` file.
-
-    Bundles a `DataConfig` and `ModelConfig` together with run-level
-    hyperparameters (seed, epochs, batch size, learning rate).
-    """
-
-    experiment_name: str
-    data: DataConfig
-    model: ModelConfig
-    seed: int
-    num_epochs: int
-    batch_size: int
-    learning_rate: float
-
-
 def load_yaml(path: Path) -> dict[str, Any]:
     """Read a YAML file into a plain dict.
 
@@ -103,15 +86,3 @@ def load_data_config(path: Path) -> DataConfig:
             f"match b2t_drift.phonemes.N_CLASSES={N_CLASSES}"
         )
     return config
-
-
-def load_experiment_config(path: Path) -> ExperimentConfig:
-    """Load an experiment config, resolving its referenced data/model configs.
-
-    Args:
-        path: Path to a `configs/experiment/*.yaml` file.
-
-    Returns:
-        A fully resolved `ExperimentConfig`.
-    """
-    raise NotImplementedError

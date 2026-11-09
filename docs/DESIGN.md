@@ -210,6 +210,19 @@ existed. The official split cannot measure drift for the same reason (`docs/DATA
 12–13): every session contributes training data, so it shows near-zero drift by construction; the
 pretrained checkpoint has no held-out future and is useful only for validating our evaluation code.
 
+**Two eval-trial viability thresholds.** The drift curve and headline
+figure use >=50 eval trials, fixed before any PER value existed. The
+recalibration grid uses 30 (`tools/recovery_figure.py`), set after the
+grid was computed, when one cell (+58d/N=50, 29 trials) was identified as
+too small to trust. That is a post-hoc choice and is recorded here as
+one. Applying the >=50 criterion to the recalibration grid instead
+changes no conclusion: full fine-tuning still wins at every elapsed time,
+the minimum-viable-budget result is untouched (346 eval trials), and the
+31-48% and 9-14% recovery ranges are unchanged, since all four boundary
+values come from cells well above 50. One number moves: the best +597d
+result becomes 0.743 (N=25, 69 trials) instead of 0.718 (N=50, 44
+trials).
+
 ---
 
 ## 8. Pipeline constraints derived from data inspection

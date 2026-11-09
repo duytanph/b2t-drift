@@ -258,7 +258,7 @@ def session_id_from_path(path: Path) -> str:
 def read_session(path: Path) -> dict[str, np.ndarray]:
     """Read one partition file's full trial arrays into memory.
 
-    TODO: not implemented, and likely never should be as written -- eagerly
+    Not implemented, and likely never should be as written -- eagerly
     loading a whole partition file's arrays reintroduces the ~12 GB-vs-16 GB
     RAM problem `data/dataset.py`'s lazy loading exists to avoid. Per-trial
     reading is implemented instead: see `iter_trial_ids` (attributes only)

@@ -221,6 +221,12 @@ actually use, are not evaluated here.
   pretrained-encoder approaches report usable adaptation from under a
   minute of labeled data. More labeled speech is not where the solution
   is expected to come from.
+- **The headline +597d recalibration number rests on 44 eval trials**,
+  below the >=50 threshold used for the drift curve. It is reported
+  because it is the most favorable cell in the grid and the verdict
+  holds regardless: restricted to >=50-trial cells, the best +597d
+  result is 0.743 rather than 0.718, which is worse for recalibration,
+  not better. See `docs/DESIGN.md` for the full sensitivity check.
 
 ## Data and reproduction
 
