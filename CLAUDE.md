@@ -31,9 +31,9 @@ Guidance for working in this repository.
 
 - No premature abstraction: no registries, no `BaseTrainer`, no plugin
   systems. One model family, one dataset. Concrete over flexible.
-- Do not invent dataset details. The HDF5 structure has not been inspected
-  yet — treat any assumption about field names, shapes, or session metadata
-  as a TODO until confirmed against the real files.
+- Do not invent dataset details. Confirm field names, shapes, and session
+  metadata against `docs/DATASET.md` or the real files before relying on
+  them.
 
 ## Documentation
 

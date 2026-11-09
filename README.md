@@ -201,7 +201,7 @@ actually use, are not evaluated here.
   recalibration grid, at two sessions. Quantified and corrected: the
   effect on the headline late-session result is +0.0014 PER (sd 0.0024),
   indistinguishable from zero.
-- Our pipeline's inference path reproduces the published checkpoint
+- This project's inference path reproduces the published checkpoint
   almost exactly (0.109 against their reported 0.101), but the training
   path does not reach the same scale: the official-split pipeline check
   reaches val PER 0.2211 against a pre-registered pass threshold of
@@ -251,6 +251,10 @@ data/raw/hdf5_data_final/
 uv sync --extra tensorboard   # plain `uv sync` leaves one test failing
 ```
 
+```bash
+uv run pytest   # 328 tests
+```
+
 | Script | What it does | Approx. runtime |
 |---|---|---|
 | `00_verify_data.py` | Scans the HDF5 files' attributes, builds `data/interim/session_manifest.csv` | a few minutes (metadata only, no array loads) |
@@ -260,15 +264,17 @@ uv sync --extra tensorboard   # plain `uv sync` leaves one test failing
 | `04_drift_curve.py` | Combines cut points into `results/drift_curve.csv` and `figures/drift_curve.png` | under a minute |
 
 Running these four in order for the s05 cut regenerates
-`results/drift_curve.csv` and `figures/drift_curve.png`, the source of
-`figures/headline.png`'s top panel. The bottom panel, and the rest of the
-attribution (Phase 2) and recalibration (Phase 3) analyses, used one-off
-scripts kept in `scratch/` (gitignored, per this project's convention)
-rather than the numbered pipeline. Those numbers are preserved in
-`results/`/`figures/` and documented with method in `docs/FINDINGS.md`,
-but the scripts that produced them are not part of the committed,
-re-runnable pipeline: a real reproducibility gap, stated here rather
-than glossed over.
+`results/drift_curve.csv` and `figures/drift_curve.png`. Six of the
+repo's fifteen figures regenerate this way, from committed CSVs with
+tracked generating scripts: both drift-curve figures, the headline
+figure, both recalibration figures, and the corpus-composition figure.
+The remaining nine are attribution analyses that read the raw T15 HDF5
+directly, and their one-off scripts live in gitignored `scratch/` rather
+than in the committed pipeline. Those numbers are preserved in `results/`
+and `figures/` and documented with method in `docs/FINDINGS.md`, but the
+scripts are not re-runnable from this repository: a real reproducibility
+gap, stated here rather than glossed over. `figures/PROVENANCE.md` gives
+the per-figure detail.
 
 ## Repo layout
 
@@ -276,6 +282,13 @@ than glossed over.
 - `tools/`: standalone diagnostics that back specific documented figures
   (e.g. padding waste, GPU step time/VRAM), distinct from `scripts/`'s
   numbered pipeline
+- `tests/`: 27 modules covering the pipeline's silent-failure modes,
+  including CTC length bookkeeping, split leakage, one-batch overfit,
+  shuffled-feature controls, and figure provenance
+- `configs/`: YAML configs for data, model, and experiment variants, read
+  by `scripts/` via the config parser
+- `data/`: ships only two small session-metadata CSVs, nothing else. The
+  raw T15 HDF5 is not included (see `figures/PROVENANCE.md`)
 - `splits/`: versioned session split manifests; `results/` / `figures/`:
   versioned numeric results and plots
 - `docs/DESIGN.md`: current decisions and their justification, no
