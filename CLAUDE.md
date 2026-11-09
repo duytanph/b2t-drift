@@ -11,9 +11,13 @@ Guidance for working in this repository.
 
 ## Data and run artifacts
 
-- Never commit anything under `data/` or `runs/`.
+- Never commit anything under `data/` or `runs/`, with two
+  longstanding exceptions carved out in `.gitignore`:
+  `data/interim/session_manifest.csv` and
+  `data/external/t15_copyTaskData_description.csv`. See
+  `figures/PROVENANCE.md`.
 - Split manifests are versioned JSON artifacts in `splits/`, never computed
-  inline in a script or notebook.
+  inline in a script.
 - Temporal splits only — never shuffle sessions across time. Session order
   matters for this project; a random train/test split across sessions would
   invalidate the drift analysis.

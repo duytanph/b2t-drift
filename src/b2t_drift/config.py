@@ -37,17 +37,6 @@ class DataConfig:
 
 
 @dataclass
-class ModelConfig:
-    """Typed view of a `configs/model/*.yaml` file."""
-
-    model_name: str
-    hidden_size: int
-    num_layers: int
-    dropout: float
-    bidirectional: bool
-
-
-@dataclass
 class ExperimentConfig:
     """Typed view of a `configs/experiment/*.yaml` file.
 
@@ -114,18 +103,6 @@ def load_data_config(path: Path) -> DataConfig:
             f"match b2t_drift.phonemes.N_CLASSES={N_CLASSES}"
         )
     return config
-
-
-def load_model_config(path: Path) -> ModelConfig:
-    """Load and validate a model config file into a `ModelConfig`.
-
-    Args:
-        path: Path to a `configs/model/*.yaml` file.
-
-    Returns:
-        A validated `ModelConfig`.
-    """
-    raise NotImplementedError
 
 
 def load_experiment_config(path: Path) -> ExperimentConfig:

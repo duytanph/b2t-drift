@@ -268,9 +268,9 @@ Running these four in order for the s05 cut regenerates
 repo's fifteen figures regenerate this way, from committed CSVs with
 tracked generating scripts: both drift-curve figures, the headline
 figure, both recalibration figures, and the corpus-composition figure.
-The remaining nine are attribution analyses that read the raw T15 HDF5
-directly, and their one-off scripts live in gitignored `scratch/` rather
-than in the committed pipeline. Those numbers are preserved in `results/`
+The remaining nine need the raw T15 HDF5, or in one case an uncommitted
+pretrained checkpoint, and their one-off scripts live in gitignored
+`scratch/` rather than in the committed pipeline. Those numbers are preserved in `results/`
 and `figures/` and documented with method in `docs/FINDINGS.md`, but the
 scripts are not re-runnable from this repository: a real reproducibility
 gap, stated here rather than glossed over. `figures/PROVENANCE.md` gives
